@@ -3,6 +3,7 @@
 
 mod autostart_migrate;
 mod bridge;
+mod engine;
 mod tray;
 
 use serde::Serialize;
