@@ -67,9 +67,10 @@ fn window_state_flags() -> StateFlags {
 fn main() {
     let preview_setup = has_flag("--preview-setup");
     let start_minimized = has_flag("--minimized");
-    let repo_root = bridge::resolve_repo_root();
+    // PIKPAK_BACKUP_REPO, then the folders above the exe (a dev build), then the engine the exe carries.
+    let repo_root = bridge::resolve_repo_root().or_else(engine::embedded_root);
     if repo_root.is_none() {
-        bridge::log("start-up: no repo folder with scripts\\Invoke-GuiAction.ps1 was found");
+        bridge::log("start-up: no repo folder with scripts\\Invoke-GuiAction.ps1 was found and the built-in scripts could not be unpacked");
     }
 
     tauri::Builder::default()

@@ -140,6 +140,23 @@ pub fn ensure_unpacked(root: &Path, bundle: &Bundle) -> Result<(), String> {
     write_file(&root.join(MARKER), bundle.hash.as_bytes())
 }
 
+/// Unpacks `bundle` into `root` and says where the engine is. A failed upgrade is logged through `log`;
+/// the old engine in `root` is still used when its bridge script is there. `None`: nothing usable.
+pub fn embedded_root_in(root: &Path, bundle: &Bundle, log: &dyn Fn(&str)) -> Option<PathBuf> {
+    match ensure_unpacked(root, bundle) {
+        Ok(()) => Some(root.to_path_buf()),
+        Err(e) => {
+            log(&format!("engine: could not unpack the PikPak Sync scripts into {}: {e}", root.display()));
+            rel_path(root, BRIDGE_REL).is_file().then(|| root.to_path_buf())
+        }
+    }
+}
+
+/// The last step of the root lookup: the engine this app carries, unpacked in `%LOCALAPPDATA%\PikPakSync`.
+pub fn embedded_root() -> Option<PathBuf> {
+    embedded_root_in(&engine_root()?, &embedded(), &crate::bridge::log)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +320,44 @@ mod tests {
         ensure_unpacked(&root, &Bundle { files: &files, hash: "h1" }).unwrap();
         assert_eq!(read(&root, "engine.hash"), "h1");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_root_in_returns_the_root_after_unpacking() {
+        let root = temp_root("resolve-ok");
+        let files = v1();
+        let logged = std::cell::RefCell::new(Vec::<String>::new());
+        let got = embedded_root_in(&root, &Bundle { files: &files, hash: "h1" }, &|m| logged.borrow_mut().push(m.to_string()));
+        assert_eq!(got, Some(root.clone()));
+        assert!(logged.borrow().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_root_in_keeps_the_old_engine_when_the_upgrade_fails() {
+        let root = temp_root("resolve-locked");
+        let (f1, f2) = (v1(), v2());
+        ensure_unpacked(&root, &Bundle { files: &f1, hash: "h1" }).unwrap();
+        let held = OpenOptions::new().read(true).share_mode(1).open(root.join("scripts/lib/a.ps1")).unwrap();
+        let logged = std::cell::RefCell::new(Vec::<String>::new());
+        let got = embedded_root_in(&root, &Bundle { files: &f2, hash: "h2" }, &|m| logged.borrow_mut().push(m.to_string()));
+        assert_eq!(got, Some(root.clone()), "the old engine still works, so the app starts with it");
+        assert_eq!(logged.borrow().len(), 1, "the failure is logged once");
+        drop(held);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_root_in_gives_none_when_nothing_is_usable() {
+        let blocker = temp_root("resolve-none");
+        fs::write(&blocker, "a file, so nothing can be created below it").unwrap();
+        let root = blocker.join("PikPakSync");
+        let files = v1();
+        let logged = std::cell::RefCell::new(Vec::<String>::new());
+        let got = embedded_root_in(&root, &Bundle { files: &files, hash: "h1" }, &|m| logged.borrow_mut().push(m.to_string()));
+        assert_eq!(got, None);
+        assert_eq!(logged.borrow().len(), 1);
+        let _ = fs::remove_file(&blocker);
     }
 
     #[test]
