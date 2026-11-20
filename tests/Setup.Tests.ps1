@@ -11,6 +11,14 @@ BeforeAll {
 }
 
 Describe 'New-MirrorTaskSpec' {
+    It 'does not need the repo drive to exist (a CI runner without G:, or an unplugged drive)' {
+        $used = @((Get-PSDrive -PSProvider FileSystem).Name)
+        $free = [char[]](72..90) | Where-Object { $used -notcontains [string]$_ } | Select-Object -First 1
+        $root = '{0}:\no such drive\repo' -f $free
+        $t = New-MirrorTaskSpec -Kind Sync -RepoRoot $root -ConfigPath ($root + '\config\mirror.config.psd1')
+        $t.Argument | Should -BeExactly ('--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}\scripts\Invoke-Sync.ps1" -ConfigPath "{0}\config\mirror.config.psd1"' -f $root)
+    }
+
     It 'Sync: runs Invoke-Sync.ps1 headless with quoted paths' {
         $t = New-MirrorTaskSpec -Kind Sync -RepoRoot $repo -ConfigPath $cfgPath
         $t.TaskName | Should -BeExactly 'PikPakMirror-Sync'

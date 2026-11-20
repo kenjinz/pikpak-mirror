@@ -30,7 +30,8 @@ function New-MirrorTaskSpec {
         AllowStartIfOnBatteries    = $true
         DontStopIfGoingOnBatteries = $true
     }
-    $script = Join-Path $root 'scripts\Invoke-Sync.ps1'
+    # Not Join-Path: Windows PowerShell 5.1 throws when the drive does not exist, and this only builds a string.
+    $script = [System.IO.Path]::Combine($root, 'scripts\Invoke-Sync.ps1')
     $triggers = @()
     if ($SyncAtLogon) { $triggers += @{ Type = 'AtLogOn'; Delay = 'PT15M'; At = $null } }
     if ($SyncIntervalMinutes -eq 0) { $triggers += @{ Type = 'Daily'; Delay = $null; At = $SyncTime } }
