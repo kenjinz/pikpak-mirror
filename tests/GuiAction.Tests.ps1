@@ -1993,6 +1993,49 @@ Describe 'Invoke-GuiRequest: identify, add, locate, adopt, newId' {
         }
     }
 
+    Context 'private.pikpakNames' {
+        BeforeEach {
+            Mock Write-GuiLog { }
+            Mock Invoke-GuiRclone {
+                if ($RcloneArgs[0] -ne 'cryptdecode') { throw ('unexpected rclone call: ' + ($RcloneArgs -join ' ')) }
+                # rclone prints "<input> \t <output>" per name, in the order given.
+                New-RcloneResult -Output @($RcloneArgs[4..($RcloneArgs.Count - 1)] | ForEach-Object { $_ + " `t " + ('enc' + $_.Length) })
+            }
+        }
+        It 'gives each name its scrambled folder under PC-Private, from one local rclone call, and logs nothing' {
+            $s = New-TestSetup -Private
+            $r = Invoke-Req (New-Req 'private.pikpakNames' @{ names = @('Photos', 'My Album') }) $s.Path
+            $r.ok | Should -BeTrue
+            $f = @($r.data.folders)
+            @($f.name) | Should -Be @('Photos', 'My Album')
+            @($f.pikpak) | Should -Be @('PC-Private/enc6', 'PC-Private/enc8')
+            Should -Invoke Invoke-GuiRclone -Times 1 -Exactly -ParameterFilter {
+                ($RcloneArgs[0..3] -join ' ') -eq 'cryptdecode --reverse private: --' -and $RcloneArgs[4] -eq 'Photos' -and $RcloneArgs[5] -eq 'My Album'
+            }
+            Should -Invoke Write-GuiLog -Times 0
+        }
+        It 'drops names that are not encrypted folder names and does not run rclone for none' {
+            $s = New-TestSetup -Private
+            $r = Invoke-Req (New-Req 'private.pikpakNames' @{ names = @('a:b', '_holding') }) $s.Path
+            $r.ok | Should -BeTrue
+            @($r.data.folders).Count | Should -Be 0
+            Should -Invoke Invoke-GuiRclone -Times 0
+        }
+        It 'a failed rclone call is remote-failed, and the log names no folder' {
+            $s = New-TestSetup -Private
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 1 -Errors @('Photos: no remote') }
+            $r = Invoke-Req (New-Req 'private.pikpakNames' @{ names = @('Photos') }) $s.Path
+            $r.error.code | Should -Be 'remote-failed'
+            Should -Invoke Write-GuiLog -Times 0 -ParameterFilter { $Message -match 'Photos' }
+        }
+        It 'a name rclone did not answer is left out, not guessed' {
+            $s = New-TestSetup -Private
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @("Photos `t encP") }
+            $r = Invoke-Req (New-Req 'private.pikpakNames' @{ names = @('Photos', 'Other') }) $s.Path
+            @($r.data.folders.name) | Should -Be @('Photos')
+        }
+    }
+
     Context 'private.remoteList, private.download and private.deleteRemote' {
         BeforeEach {
             $script:markers = @{}

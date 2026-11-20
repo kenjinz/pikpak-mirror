@@ -506,6 +506,7 @@ mod tests {
             "folders.identify",
             "folders.locateReview",
             "private.remoteList",
+            "private.pikpakNames",
         ] {
             assert!(!is_write_action(a), "{a} is not a write action");
         }

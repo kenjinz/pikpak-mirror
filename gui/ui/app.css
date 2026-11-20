@@ -123,6 +123,17 @@ h4.section { font-size:15px; font-weight:600; margin:1.5rem 0 .5rem; }
 .pill.wait { background:#ECEFF3; color:var(--muted); }
 .pill.warn { background:var(--warn-soft); color:var(--warn); }
 .pill.bad { background:var(--bad-soft); color:var(--bad); }
+
+/* hover / focus tooltip (data-tip), shown after a short pause */
+.tip { position:relative; cursor:help; }
+.tip[data-tip]:hover::after, .tip[data-tip]:focus-visible::after {
+  content:attr(data-tip); position:absolute; left:0; top:calc(100% + 6px); z-index:25;
+  background:var(--ink); color:#fff; font-size:12px; font-weight:400; line-height:1.4; padding:.35rem .6rem; border-radius:6px;
+  white-space:nowrap; font-family:ui-monospace, Consolas, monospace; box-shadow:0 6px 16px rgba(31,42,55,.25); pointer-events:none;
+  animation:tip-in .12s ease .45s both;
+}
+@keyframes tip-in { from { opacity:0; transform:translateY(-2px); } to { opacity:1; transform:none; } }
+.srow .tip { text-decoration:underline dotted var(--muted); text-underline-offset:3px; }
 .side { display:flex; flex-direction:column; gap:1rem; }
 .panel { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:.85rem .9rem; }
 .panel h5 { margin:0 0 .45rem; font-size:13px; font-weight:600; }

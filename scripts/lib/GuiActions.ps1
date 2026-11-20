@@ -411,6 +411,7 @@ function Invoke-GuiRequest {
             'private.add' { $fn = 'Invoke-GuiActionPrivateAdd' }
             'private.remove' { $fn = 'Invoke-GuiActionPrivateRemove' }
             'private.remoteList' { $fn = 'Invoke-GuiActionPrivateRemoteList' }
+            'private.pikpakNames' { $fn = 'Invoke-GuiActionPrivatePikpakNames' }
             'private.download' { $fn = 'Invoke-GuiActionPrivateDownload' }
             'private.deleteRemote' { $fn = 'Invoke-GuiActionPrivateDeleteRemote' }
             'sync.start' { $fn = 'Invoke-GuiActionSyncStart' }
@@ -1812,6 +1813,32 @@ function Invoke-GuiActionPrivateRemoteList {
         $conn = $null; $paused = $false
         if ($null -ne $info.Connected) { $conn = [string]$info.Connected.Local; $paused = [bool]$info.Connected.Paused }
         $folders.Add(@{ name = $n; bytes = $bytes; id = $info.Id; connectedTo = $conn; paused = $paused })
+    }
+    @{ folders = $folders.ToArray() }
+}
+
+function Invoke-GuiActionPrivatePikpakNames {
+    # The scrambled folder each encrypted folder Name has in PikPak (PC-Private/<scrambled>), for the app's
+    # tooltip and "Copy PikPak folder name". `rclone cryptdecode --reverse` works it out from the key on this PC
+    # without contacting PikPak. Nothing is stored, and the log never pairs a real name with its scrambled one.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $names = @(@(Get-GuiArg $Ctx 'names' @()) | ForEach-Object { [string]$_ } | Where-Object { Test-EncryptedFolderName $_ } | Select-Object -Unique)
+    if ($names.Count -eq 0) { return @{ folders = @() } }
+    # '--' so that a name starting with '-' is never read as an rclone flag.
+    $r = Invoke-GuiRclone -RcloneArgs (@('cryptdecode', '--reverse', ([string]$Ctx.Config.PrivateRemote + ':'), '--') + $names)
+    if ($r.ExitCode -ne 0) {
+        Write-GuiLog $Ctx.Config ('Working out the PikPak names of the encrypted folders failed (exit {0}).' -f $r.ExitCode)
+        throw (New-GuiException 'remote-failed' "The PikPak names of your encrypted folders couldn't be worked out.")
+    }
+    # rclone prints "<name> \t <scrambled>" per name; a name it did not answer is left out.
+    $lines = @($r.Output | ForEach-Object { [string]$_ })
+    $folders = New-Object System.Collections.Generic.List[object]
+    foreach ($n in $names) {
+        $prefix = $n + " `t "
+        $line = @($lines | Where-Object { $_.StartsWith($prefix, [StringComparison]::Ordinal) }) | Select-Object -First 1
+        if ($null -eq $line) { continue }
+        $enc = $line.Substring($prefix.Length).Trim()
+        if ($enc -ne '') { $folders.Add(@{ name = $n; pikpak = 'PC-Private/' + $enc }) }
     }
     @{ folders = $folders.ToArray() }
 }

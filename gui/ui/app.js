@@ -7,6 +7,7 @@ import { call, callFull, invoke, openPath, openUrl, listen, setPreviewAll } from
 import { ELLIPSIS, GIB, $, $$, h, asList, say, messageOf, fmtSize, fmtDay, baseName } from './util.js';
 import { initFolderBoxes, addFolder, addEncryptedFolder, pauseFolder, locateFolder, adoptFolder, giveNewId, chooseSameId } from './folders.js';
 import { setupScreens, wireSetup } from './setup.js';
+import { pikpakTip, copyPikpakName } from './pikpak-name.js';
 import { settingsScreen, wireSettings, settingsTrayChanged } from './settings.js';
 
 // ===== confirm box ==================================================================================
@@ -321,7 +322,7 @@ function renderFolders() {
     });
     const row = h('div', { class: f.Paused ? 'hrow paused' : 'hrow' },
       h('div', {},
-        h('div', { class: 'fname' }, f.Name, f.Private ? [' ', h('span', { class: 'pill wait', text: 'Encrypted' })] : null),
+        h('div', { class: 'fname' }, f.Name, f.Private ? [' ', pikpakTip(h('span', { class: 'pill wait', text: 'Encrypted' }), f.Name)] : null),
         h('div', { class: 'fpath', text: f.Local || '', title: f.Local || '' }),
         f.Issue ? h('div', { class: f.PillTone === 'bad' ? 'fissue' : 'fissue warn', text: f.Issue }) : null,
         rowButtons(f)),
@@ -340,6 +341,7 @@ function openFolderMenu(row, button, f) {
   // While a sync or a change runs, a second change or Repair would be refused anyway: show them off.
   const running = isRunning();
   const items = [['Open folder', () => openFolder(f.Local)]];
+  if (f.Private) items.push(['Copy PikPak folder name', () => copyPikpakFolder(f)]);
   if (canRepair(f)) items.push(['Repair', () => repairFolder(f), null, running]);
   // A paused folder can't be changed (the change syncs it one last time first): Resume it first.
   if (!f.Paused) {
@@ -375,6 +377,16 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.menu') && !e.target.closest('.more')) closeMenus();
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenus(); });
+
+/** Copies the encrypted folder's scrambled name in PikPak, to find it on the PikPak website. */
+async function copyPikpakFolder(f) {
+  try {
+    const text = await copyPikpakName(f.Name);
+    say('foldersMsg', 'Copied ' + text + '. That is ' + f.Name + ' on the PikPak website.', 'done');
+  } catch (e) {
+    say('foldersMsg', 'The PikPak name of ' + f.Name + " couldn't be worked out or copied. Try again.", 'problem');
+  }
+}
 
 async function openFolder(path) {
   try {

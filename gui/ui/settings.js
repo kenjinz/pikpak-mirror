@@ -7,6 +7,7 @@
 
 import { call, invoke, pickFolder, pickSaveFile, writeTextFile, copyText, autostartEnabled, setAutostart } from './bridge.js';
 import { ELLIPSIS, GIB, $, h, asList, say, messageOf, fmtSize, keyGroups, keySheetLines, keySheetText, fillKeySheet, clearKeySheet } from './util.js';
+import { pikpakTip, copyPikpakName } from './pikpak-name.js';
 
 const KEY_FILE_NAME = 'PikPak recovery key.txt';
 const DEFAULT_BW = { from: '18:00', speed: '2M', to: '23:00' };   // BwLimit '18:00,2M:off 23:00,off'
@@ -327,7 +328,8 @@ function renderRemote() {
     const size = f.bytes === null || f.bytes === undefined ? 'size not known' : fmtSize(f.bytes);
     const where = f.connectedTo ? 'Connected to ' + f.connectedTo + (f.paused ? ' (paused)' : '') : 'Not connected';
     const row = h('div', { class: 'srow' },
-      h('span', {}, String(f.name), h('span', { class: 'small path', text: size + ', ' + where })));
+      h('span', {}, pikpakTip(h('span', { text: String(f.name) }), String(f.name)), h('span', { class: 'small path', text: size + ', ' + where })),
+      h('button', { class: 'btn btn-quiet', text: 'Copy PikPak name', onclick: () => copyRemoteName(f) }));
     if (!f.connectedTo) {
       row.append(
         h('button', { class: 'btn', text: 'Reconnect' + ELLIPSIS, onclick: ev => reconnectRemote(f, ev.currentTarget) }),
@@ -366,6 +368,14 @@ async function refreshRemote() {
   } catch (e) {
     return "The list couldn't be read again. Press Show.";
   }
+}
+
+/** Copies an encrypted folder's scrambled name in PikPak, to find it on the PikPak website. */
+async function copyRemoteName(f) {
+  try {
+    const text = await copyPikpakName(String(f.name));
+    say('setRemoteMsg', 'Copied ' + text + ". That is '" + f.name + "' on the PikPak website.", 'done');
+  } catch (e) { say('setRemoteMsg', "The PikPak name of '" + f.name + "' couldn't be worked out or copied. Try again.", 'problem'); }
 }
 
 /** Runs fn with every button of btn's row off, so a second click can't open a second picker or box. */
