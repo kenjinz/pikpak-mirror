@@ -1,0 +1,13 @@
+.superpowers/
+.claude/settings.local.json
+logs/
+*.local.psd1
+.pikpak-*
+gui/src-tauri/target/
+gui/src-tauri/gen/schemas/
+config/*.bak
+config/mirror.config.original.psd1
+config/*.tmp
+
+# Your own configuration (the app writes it; config/mirror.config.sample.psd1 is the template)
+config/mirror.config.psd1

@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PikPak Backup prototype</title>
+<style>
+  :root {
+    --ink:#1F2A37; --muted:#5B6776; --line:#D6DEE6; --win:#F3F6F9; --paper:#FFFFFF;
+    --teal:#0F6E6A; --teal-soft:#E2F0EF; --tag:#F6E3A1; --tagline:#C9A93F;
+    --warn:#9A5B00; --warn-soft:#FBF0DC; --bad:#B3261E; --bad-soft:#FBE7E5;
+    --stage:#E4E9EE;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--stage); color:var(--ink);
+    font-family:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif; font-size:14px; line-height:1.5; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+
+  .stage { display:grid; grid-template-columns:260px minmax(0,1fr); gap:20px; padding:20px; max-width:1240px; margin:0 auto; }
+  @media (max-width:860px) { .stage { grid-template-columns:1fr; padding:16px; } }
+
+  /* ---------- prototype controls (not part of the app) ---------- */
+  .proto { font-size:13px; color:var(--muted); }
+  .proto h1 { font-size:15px; color:var(--ink); margin:0 0 .25rem; }
+  .proto p { margin:0 0 1rem; }
+  .proto h2 { font-size:13px; color:var(--ink); margin:1.25rem 0 .4rem; }
+  .proto-links { display:flex; flex-wrap:wrap; gap:6px; }
+  .proto-link { border:1px solid #C5CED8; background:#F7F9FB; border-radius:6px; padding:3px 9px; cursor:pointer; }
+  .proto-link:hover { border-color:var(--teal); }
+  .proto-states { display:flex; flex-direction:column; gap:2px; }
+  .proto-states label { display:flex; gap:6px; align-items:center; cursor:pointer; }
+  .fb-toggle { width:100%; margin-top:.25rem; padding:.55rem .7rem; border-radius:8px; border:1.5px solid var(--tagline); background:var(--tag); color:var(--ink); font-weight:600; cursor:pointer; text-align:left; }
+  .fb-toggle[aria-pressed="true"] { background:var(--ink); border-color:var(--ink); color:#fff; }
+  .fb-list { margin:.5rem 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:4px; max-height:240px; overflow:auto; }
+  .fb-list li { background:#F7F9FB; border:1px solid var(--line); border-radius:6px; padding:4px 7px; color:var(--ink); }
+  .fb-list .v { font-weight:600; }
+
+  /* ---------- the app window ---------- */
+  .win { background:var(--win); border:1px solid #C5CED8; border-radius:10px; overflow:hidden; box-shadow:0 10px 30px rgba(31,42,55,.12); min-height:640px; display:flex; flex-direction:column; }
+  .titlebar { display:flex; align-items:center; justify-content:space-between; gap:1rem; background:var(--paper); border-bottom:1px solid var(--line); padding:.5rem .9rem; font-size:12px; color:var(--muted); }
+  .titlebar .dots { letter-spacing:.6em; }
+  .appbar { display:flex; align-items:center; justify-content:space-between; padding:.9rem 1.5rem 0; }
+  .appname { font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif; font-weight:600; font-size:15px; }
+  .screen { display:none; padding:1.25rem 1.5rem 1.5rem; flex:1; }
+  .screen.on { display:block; }
+  .narrow { max-width:560px; }
+  h3.title { font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif; font-size:26px; font-weight:600; line-height:1.2; margin:0 0 .5rem; }
+  h4.section { font-size:15px; font-weight:600; margin:1.5rem 0 .5rem; }
+  .lead { color:var(--muted); margin:0 0 1.25rem; max-width:52ch; }
+  .small { font-size:12px; color:var(--muted); }
+  .step { font-size:12px; color:var(--muted); margin:0 0 .3rem; }
+
+  .btn { padding:.5rem 1rem; border-radius:6px; border:1px solid var(--line); background:var(--paper); cursor:pointer; }
+  .btn:hover { border-color:var(--muted); }
+  .btn-primary { background:var(--teal); border-color:var(--teal); color:#fff; font-weight:600; }
+  .btn-primary:hover { background:#0B5B58; border-color:#0B5B58; }
+  .btn-primary:disabled { opacity:.45; cursor:not-allowed; }
+  .btn-quiet { border-color:transparent; background:transparent; color:var(--teal); padding-left:.4rem; padding-right:.4rem; }
+  .btn-quiet:hover { border-color:transparent; text-decoration:underline; }
+  .row-actions { display:flex; gap:.5rem; flex-wrap:wrap; }
+  .foot { display:flex; justify-content:space-between; align-items:center; gap:1rem; border-top:1px solid var(--line); margin-top:1.5rem; padding-top:1rem; }
+
+  .field { display:block; margin:0 0 .9rem; }
+  .field span { display:block; font-weight:600; margin-bottom:.25rem; }
+  .field input { width:100%; padding:.55rem .7rem; border:1px solid #B8C3CE; border-radius:6px; background:var(--paper); }
+  .note { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:.7rem .85rem; color:var(--muted); font-size:13px; }
+
+  /* welcome */
+  .promises { list-style:none; padding:0; margin:0 0 1.5rem; display:flex; flex-direction:column; gap:.6rem; }
+  .promises li { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:.7rem .9rem; }
+  .promises b { display:block; }
+
+  /* folder picker */
+  .folders { background:var(--paper); border:1px solid var(--line); border-radius:8px; }
+  .frow { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; gap:.75rem; align-items:center; padding:.7rem .9rem; border-top:1px solid var(--line); }
+  .frow:first-child { border-top:0; }
+  .frow input[type=checkbox] { width:17px; height:17px; accent-color:var(--teal); }
+  .fname { font-weight:600; }
+  .fpath { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fsize { color:var(--muted); font-variant-numeric:tabular-nums; text-align:right; min-width:5.5ch; }
+  .lock { display:flex; align-items:center; gap:.35rem; font-size:12px; color:var(--muted); cursor:pointer; white-space:nowrap; }
+  .lock input { accent-color:var(--ink); }
+  .frow.off .fname, .frow.off .fsize { color:#9AA5B1; }
+  .space { margin:1rem 0 0; }
+  .bar { height:10px; background:#DCE3EA; border-radius:999px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--teal); border-radius:999px; transition:width .25s; }
+  .bar.over > i { background:var(--warn); }
+  .space-text { display:flex; justify-content:space-between; font-size:13px; margin-top:.35rem; }
+  .space-warn { margin-top:.6rem; background:var(--warn-soft); color:var(--warn); border-radius:6px; padding:.55rem .75rem; font-size:13px; }
+
+  /* the recovery key tag (the one bold element) */
+  .tag { position:relative; background:var(--tag); border:1px dashed var(--tagline); border-radius:6px 16px 16px 6px; padding:1.1rem 1rem 1.1rem 2.8rem; margin:0 0 1rem; }
+  .tag::before { content:""; position:absolute; left:1rem; top:50%; width:13px; height:13px; margin-top:-6.5px; border-radius:50%; background:var(--win); border:1px solid var(--tagline); }
+  .key { font-family:"Cascadia Mono",Consolas,monospace; font-size:19px; letter-spacing:.04em; word-spacing:.25em; }
+  .tagnote { font-size:12px; color:#7A6420; margin-top:.2rem; }
+  .check { display:flex; gap:.6rem; align-items:flex-start; padding:.75rem .85rem; background:var(--paper); border:1px solid var(--line); border-radius:8px; cursor:pointer; }
+  .check input { width:17px; height:17px; margin-top:2px; accent-color:var(--teal); }
+  .done-msg { color:var(--teal); font-weight:600; font-size:13px; min-height:1.5em; margin:-.4rem 0 .9rem; }
+
+  /* home */
+  .status { border-radius:10px; padding:1.1rem 1.25rem; background:var(--paper); border:1px solid var(--line); border-left:6px solid var(--teal); display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; flex-wrap:wrap; }
+  .status.warn { border-left-color:var(--warn); background:var(--warn-soft); }
+  .status.bad { border-left-color:var(--bad); background:var(--bad-soft); }
+  .status h3 { font-family:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif; font-size:24px; font-weight:600; margin:0 0 .25rem; line-height:1.2; }
+  .status p { margin:0; color:var(--muted); max-width:58ch; }
+  .status .bar { margin-top:.6rem; max-width:380px; }
+  .home-grid { display:grid; grid-template-columns:minmax(0,1fr) 250px; gap:1.25rem; margin-top:1.25rem; }
+  @media (max-width:1000px) { .home-grid { grid-template-columns:1fr; } }
+  .hrow { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.75rem; align-items:center; padding:.65rem .9rem; border-top:1px solid var(--line); }
+  .hrow:first-child { border-top:0; }
+  .pill { font-size:12px; padding:.1rem .55rem; border-radius:999px; background:var(--teal-soft); color:var(--teal); white-space:nowrap; }
+  .pill.wait { background:#ECEFF3; color:var(--muted); }
+  .pill.warn { background:var(--warn-soft); color:var(--warn); }
+  .pill.bad { background:var(--bad-soft); color:var(--bad); }
+  .side { display:flex; flex-direction:column; gap:1rem; }
+  .panel { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:.85rem .9rem; }
+  .panel h5 { margin:0 0 .45rem; font-size:13px; font-weight:600; }
+  .panel .space-text { font-size:12px; color:var(--muted); }
+  .links { display:flex; flex-direction:column; gap:.15rem; align-items:flex-start; }
+
+  /* restore / settings */
+  .list { background:var(--paper); border:1px solid var(--line); border-radius:8px; }
+  .lrow { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:1rem; align-items:center; padding:.6rem .9rem; border-top:1px solid var(--line); }
+  .lrow:first-child { border-top:0; }
+  .search { width:100%; max-width:360px; padding:.5rem .7rem; border:1px solid #B8C3CE; border-radius:6px; margin-bottom:.75rem; background:var(--paper); }
+  .set { background:var(--paper); border:1px solid var(--line); border-radius:8px; padding:.2rem .9rem; }
+  .srow { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:.65rem 0; border-top:1px solid var(--line); }
+  .srow:first-child { border-top:0; }
+  .srow .small { display:block; }
+  .srow select { padding:.35rem .5rem; border:1px solid #B8C3CE; border-radius:6px; background:var(--paper); }
+  .switch { width:38px; height:22px; accent-color:var(--teal); }
+  details.adv { margin-top:1rem; }
+  details.adv summary { cursor:pointer; font-weight:600; color:var(--muted); }
+  .danger { color:var(--bad); }
+
+  /* ---------- feedback mode ---------- */
+  body.fb [data-fb] { outline:1.5px dashed transparent; outline-offset:3px; cursor:help; }
+  body.fb [data-fb]:hover { outline-color:var(--tagline); background-color:rgba(246,227,161,.25); }
+  body.fb [data-fb].marked { outline-color:var(--ink); }
+  .pop { position:fixed; z-index:50; width:300px; background:var(--paper); border:1px solid #B8C3CE; border-radius:10px; box-shadow:0 12px 30px rgba(31,42,55,.2); padding:.85rem; display:none; }
+  .pop.on { display:block; }
+  .pop h6 { font-size:13px; margin:0 0 .5rem; }
+  .verdicts { display:flex; gap:6px; margin-bottom:.5rem; flex-wrap:wrap; }
+  .verdicts button { border:1px solid var(--line); background:#F7F9FB; border-radius:999px; padding:.25rem .7rem; cursor:pointer; }
+  .verdicts button[aria-pressed="true"] { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .pop textarea { width:100%; min-height:60px; border:1px solid #B8C3CE; border-radius:6px; padding:.4rem .5rem; resize:vertical; }
+  .pop .row-actions { justify-content:flex-end; margin-top:.5rem; }
+
+  @media (prefers-reduced-motion:reduce) { * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <aside class="proto" aria-label="Prototype controls">
+    <h1>Prototype, not the real app</h1>
+    <p>Fake data. Nothing connects to PikPak. Click through it like a first-time user would.</p>
+
+    <h2>Give feedback</h2>
+    <button class="fb-toggle" id="fbToggle" aria-pressed="false">Feedback mode is off: click to turn on</button>
+    <p class="small" style="margin-top:.4rem">When it's on, click any part of the app to mark it <b>Keep</b>, <b>Don't need</b> or <b>Confusing</b>, with an optional note. Claude reads these.</p>
+    <ul class="fb-list" id="fbList"></ul>
+
+    <h2>Jump to</h2>
+    <div class="proto-links">
+      <button class="proto-link" data-go="welcome">Setup</button>
+      <button class="proto-link" data-go="home">Home</button>
+      <button class="proto-link" data-go="restore">Deleted files</button>
+      <button class="proto-link" data-go="offload">Free up space</button>
+      <button class="proto-link" data-go="settings">Settings</button>
+    </div>
+
+    <h2>What's happening on Home</h2>
+    <div class="proto-states" id="protoStates"></div>
+  </aside>
+
+  <main class="win" aria-label="PikPak Backup app window">
+    <div class="titlebar"><span>PikPak Backup</span><span class="dots" aria-hidden="true">— ▢ ✕</span></div>
+    <div class="appbar" id="appbar" hidden>
+      <span class="appname">PikPak Backup</span>
+      <span class="row-actions">
+        <button class="btn btn-quiet" data-go="home">Home</button>
+        <button class="btn btn-quiet" data-go="settings" data-fb="Settings button">Settings</button>
+      </span>
+    </div>
+
+    <!-- ===== Setup: welcome ===== -->
+    <section class="screen on" id="s-welcome">
+      <div class="narrow">
+        <h3 class="title" data-fb="Welcome headline">Back up this PC to PikPak</h3>
+        <p class="lead">Pick the folders you care about. They're copied to your PikPak every evening, and you can get them back from any PC.</p>
+        <ul class="promises" data-fb="Welcome: three promises">
+          <li><b>Runs by itself</b>Every evening while your PC is on. You don't need to open this app.</li>
+          <li><b>Deleted something by mistake?</b>Anything you delete or overwrite is kept for 30 days.</li>
+          <li><b>Private folders stay private</b>Folders you mark private are locked before they leave your PC.</li>
+        </ul>
+        <button class="btn btn-primary" data-go="signin">Get started</button>
+      </div>
+    </section>
+
+    <!-- ===== Setup: sign in ===== -->
+    <section class="screen" id="s-signin">
+      <div class="narrow">
+        <p class="step" id="stepSignin">Step 1 of 4</p>
+        <h3 class="title">Sign in to PikPak</h3>
+        <p class="lead">Use the same email and password as the PikPak app on your phone.</p>
+        <label class="field"><span>Email</span><input type="email" id="email" value="me@example.com" autocomplete="off"></label>
+        <label class="field"><span>Password</span><input type="password" id="pw" value="secret123"></label>
+        <p class="note" data-fb="Sign-in privacy note">Your password goes only to PikPak. It's kept on this PC so backups can run while you're away.</p>
+        <p class="small" id="signinMsg" style="min-height:1.5em; margin:.6rem 0 0"></p>
+        <div class="foot"><button class="btn" data-go="welcome">Back</button><button class="btn btn-primary" id="signinBtn">Sign in</button></div>
+      </div>
+    </section>
+
+    <!-- ===== Setup: folders ===== -->
+    <section class="screen" id="s-folders">
+      <div class="narrow" style="max-width:640px">
+        <p class="step" id="stepFolders">Step 2 of 4</p>
+        <h3 class="title">Choose what to back up</h3>
+        <p class="lead">We ticked the folders that fit in your PikPak. Untick anything you don't need.</p>
+        <div class="folders" id="folderList" data-fb="Folder list with sizes"></div>
+        <div class="row-actions" style="margin-top:.6rem"><button class="btn btn-quiet" id="addFolder" data-fb="Add a folder">Add another folder</button></div>
+        <div class="space" data-fb="Space bar (fits / doesn't fit)">
+          <div class="bar" id="spaceBar"><i></i></div>
+          <div class="space-text"><span id="spaceUsed"></span><span class="small" id="spaceAcct">Free PikPak account, 6 GB</span></div>
+          <div class="space-warn" id="spaceWarn" hidden></div>
+        </div>
+        <p class="small" style="margin-top:.75rem" data-fb="Private switch explanation">Mark a folder <b>Private</b> to lock it with a recovery key before it's uploaded. Only this app, with that key, can open it.</p>
+        <div class="foot"><button class="btn" data-go="signin">Back</button><button class="btn btn-primary" id="foldersNext">Continue</button></div>
+      </div>
+    </section>
+
+    <!-- ===== Setup: recovery key (option A) ===== -->
+    <section class="screen" id="s-key">
+      <div class="narrow">
+        <p class="step">Step 3 of 4</p>
+        <h3 class="title">Save your recovery key</h3>
+        <p class="lead">Your private folders are locked with this key before they leave your PC. If this PC ever breaks, you'll need it to open them on a new one. Nobody else has a copy, not even PikPak.</p>
+        <div class="tag" data-fb="Recovery key tag">
+          <div class="key" id="keyText">7HQX2 MPD4T W9KZR C3VNE 6BJYA FU8LS</div>
+          <div class="tagnote">No zeros or O's, no ones or L's, so it's easy to copy by hand.</div>
+        </div>
+        <div class="row-actions" style="margin-bottom:1rem" data-fb="Save / Print / Copy buttons">
+          <button class="btn btn-primary" data-keyact="Saved to E:\PikPak recovery key.txt (USB stick)">Save to a file…</button>
+          <button class="btn" data-keyact="Sent to your printer">Print</button>
+          <button class="btn" data-keyact="Copied. Paste it somewhere safe, like a notes app on your phone.">Copy</button>
+        </div>
+        <p class="done-msg" id="keyMsg" aria-live="polite"></p>
+        <label class="check" data-fb="'I've kept it elsewhere' tick box"><input type="checkbox" id="keyKept"><span>I've kept it somewhere other than this PC, like a USB stick, my phone or on paper.</span></label>
+        <p class="small" style="margin:.6rem 0 0">You can see it again any time in Settings.</p>
+        <div class="foot"><button class="btn" data-go="folders">Back</button><button class="btn btn-primary" id="keyNext" disabled>Continue</button></div>
+      </div>
+    </section>
+
+    <!-- ===== Setup: done ===== -->
+    <section class="screen" id="s-done">
+      <div class="narrow">
+        <p class="step" id="stepDone">Step 4 of 4</p>
+        <h3 class="title">You're all set</h3>
+        <p class="lead" id="doneLead" data-fb="'First backup takes a few evenings' message"></p>
+        <div class="note" style="margin-bottom:1.25rem" data-fb="Drive P: explanation">Your backup also shows up in File Explorer as drive <b>P:</b>, so you can open files from PikPak like any other folder.</div>
+        <button class="btn btn-primary" id="finish">Start my first backup</button>
+      </div>
+    </section>
+
+    <!-- ===== Home ===== -->
+    <section class="screen" id="s-home">
+      <div class="status" id="status" data-fb="Big status message"></div>
+      <div class="home-grid">
+        <div>
+          <h4 class="section" style="margin-top:0">Backed-up folders</h4>
+          <div class="folders" id="homeFolders" data-fb="Home: folder list and status"></div>
+          <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" data-fb="Home: add a folder">Add a folder</button></div>
+        </div>
+        <div class="side">
+          <div class="panel" data-fb="PikPak space panel">
+            <h5>Space in your PikPak</h5>
+            <div class="bar"><i id="homeSpace" style="width:40%"></i></div>
+            <div class="space-text"><span id="homeSpaceText">2.4 GB of 6 GB used</span></div>
+          </div>
+          <div class="panel" data-fb="Monthly upload panel">
+            <h5>Uploaded this month</h5>
+            <div class="bar" id="monthBar"><i id="monthFill" style="width:8%"></i></div>
+            <div class="space-text"><span id="monthText">2.4 GB of 30 GB</span></div>
+            <p class="small" style="margin:.35rem 0 0">PikPak limits how much apps can upload each month. Backups wait for the 1st if you reach it.</p>
+          </div>
+          <div class="panel">
+            <h5>Shortcuts</h5>
+            <div class="links">
+              <button class="btn btn-quiet" data-fb="Open backup in File Explorer">Open my backup in File Explorer</button>
+              <button class="btn btn-quiet" data-go="restore" data-fb="Get back a deleted file">Get back a deleted file</button>
+              <button class="btn btn-quiet" data-go="offload" data-fb="Free up space on this PC">Free up space on this PC</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Restore deleted files ===== -->
+    <section class="screen" id="s-restore">
+      <h3 class="title">Get back a deleted file</h3>
+      <p class="lead">Files you delete or overwrite on this PC are kept for 30 days. Pick one to put it back where it was.</p>
+      <input class="search" placeholder="Search by file name" data-fb="Restore: search box">
+      <div class="list" id="restoreList" data-fb="Restore: list of deleted files"></div>
+      <div class="foot"><button class="btn" data-go="home">Back to home</button><span></span></div>
+    </section>
+
+    <!-- ===== Offload ===== -->
+    <section class="screen" id="s-offload">
+      <div class="narrow">
+        <h3 class="title">Free up space on this PC</h3>
+        <p class="lead">Move files you rarely open to your PikPak Archive. They leave this PC but stay safe in PikPak, and you can download them again any time.</p>
+        <div class="note" style="margin-bottom:1rem" data-fb="Offload: right-click tip">Tip: you can also right-click a file in File Explorer and choose <b>Move to PikPak Archive</b>.</div>
+        <div class="row-actions"><button class="btn btn-primary" id="offloadPick" data-fb="Offload: choose files button">Choose files to move…</button></div>
+        <p class="done-msg" id="offloadMsg" style="margin-top:.75rem" aria-live="polite"></p>
+        <div class="foot"><button class="btn" data-go="home">Back to home</button><span></span></div>
+      </div>
+    </section>
+
+    <!-- ===== Settings ===== -->
+    <section class="screen" id="s-settings">
+      <div class="narrow" style="max-width:640px">
+        <h3 class="title">Settings</h3>
+
+        <h4 class="section">Backups</h4>
+        <div class="set">
+          <div class="srow" data-fb="Settings: pause backups"><span>Pause backups<span class="small">Nothing uploads until you switch this off.</span></span><input type="checkbox" class="switch" id="pause"></div>
+          <div class="srow" data-fb="Settings: backup time"><span>When to back up</span>
+            <select><option>Every evening at 20:00</option><option>Every evening at 22:00</option><option>Every night at 01:00</option></select></div>
+          <div class="srow" data-fb="Settings: back up after sign-in"><span>Also back up soon after I turn on my PC<span class="small">15 minutes after you sign in to Windows.</span></span><input type="checkbox" class="switch" checked></div>
+          <div class="srow" data-fb="Settings: go easy on internet"><span>Go easy on my internet in the evening<span class="small">Uploads slowly between 18:00 and 23:00 so videos and calls don't stutter.</span></span><input type="checkbox" class="switch" checked></div>
+        </div>
+
+        <h4 class="section">Recovery key</h4>
+        <div class="set" data-fb="Settings: show recovery key">
+          <div class="srow"><span>You need this to open your private folders on another PC.</span><button class="btn" id="showKey">Show recovery key</button></div>
+          <div id="keyAgain" hidden style="padding:.2rem 0 .8rem"><div class="tag" style="margin:0"><div class="key">7HQX2 MPD4T W9KZR C3VNE 6BJYA FU8LS</div></div></div>
+        </div>
+
+        <h4 class="section">File Explorer</h4>
+        <div class="set">
+          <div class="srow" data-fb="Settings: drive P:"><span>Show my backup as drive P:</span><input type="checkbox" class="switch" checked></div>
+          <div class="srow" data-fb="Settings: drive Q: (private, read-only)"><span>Show my private folders as drive Q:<span class="small">Read-only, so nothing in your private backup changes by accident.</span></span><input type="checkbox" class="switch" checked></div>
+        </div>
+
+        <h4 class="section">PikPak account</h4>
+        <div class="set" data-fb="Settings: account">
+          <div class="srow"><span>me@example.com<span class="small">Free account, 6 GB</span></span><button class="btn">Sign out</button></div>
+        </div>
+
+        <details class="adv" data-fb="Settings: advanced section">
+          <summary>Advanced</summary>
+          <div class="set" style="margin-top:.6rem">
+            <div class="srow"><span>Upload limit per evening<span class="small">Set for you from your account type.</span></span><span>1 GB</span></div>
+            <div class="srow"><span>Upload limit per month</span><span>30 GB</span></div>
+            <div class="srow"><span>Keep deleted files for</span><span>30 days</span></div>
+            <div class="srow"><span>Stop and ask me if a backup would delete more than</span><span>10% of a folder</span></div>
+            <div class="srow"><span>Temporary files</span><span class="small">D:\.pikpak-cache</span></div>
+          </div>
+        </details>
+
+        <div class="foot"><button class="btn" data-go="home">Back to home</button><button class="btn btn-quiet danger" data-fb="Settings: remove app">Remove PikPak Backup from this PC</button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- feedback popover -->
+<div class="pop" id="pop" role="dialog" aria-label="Feedback">
+  <h6 id="popTitle"></h6>
+  <div class="verdicts" id="verdicts">
+    <button data-v="Keep">Keep</button>
+    <button data-v="Don't need">Don't need</button>
+    <button data-v="Confusing">Confusing</button>
+  </div>
+  <textarea id="popNote" placeholder="Anything to add? (optional)"></textarea>
+  <div class="row-actions"><button class="btn" id="popCancel">Cancel</button><button class="btn btn-primary" id="popSend">Send</button></div>
+</div>
+
+<script>
+(function () {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const CAP = 6;
+  let current = 'welcome';
+
+  const folders = [
+    { name: 'Pictures',  path: 'C:\\Users\\Alex\\Pictures',  gb: 2.1, on: true,  priv: false },
+    { name: 'Documents', path: 'C:\\Users\\Alex\\Documents', gb: 0.3, on: true,  priv: false },
+    { name: 'Desktop',   path: 'C:\\Users\\Alex\\Desktop',   gb: 0.6, on: true,  priv: false },
+    { name: 'Music',     path: 'C:\\Users\\Alex\\Music',     gb: 41,  on: false, priv: false },
+    { name: 'Videos',    path: 'C:\\Users\\Alex\\Videos',    gb: 120, on: false, priv: false }
+  ];
+  const fmt = gb => (gb < 10 ? gb.toFixed(1) : Math.round(gb)) + ' GB';
+  const anyPrivate = () => folders.some(f => f.on && f.priv);
+  const chosenGB = () => folders.filter(f => f.on).reduce((a, f) => a + f.gb, 0);
+
+  // ---------- navigation ----------
+  function go(name) {
+    if (name === 'key' && !anyPrivate()) name = 'done';
+    current = name;
+    $$('.screen').forEach(s => s.classList.toggle('on', s.id === 's-' + name));
+    const inApp = ['home', 'restore', 'offload', 'settings'].includes(name);
+    $('#appbar').hidden = !inApp;
+    if (name === 'folders') renderFolders();
+    if (name === 'done') renderDone();
+    if (name === 'home') renderHome();
+    if (name === 'restore') renderRestore();
+    stepNumbers();
+    window.scrollTo(0, 0);
+  }
+  document.addEventListener('click', e => {
+    const g = e.target.closest('[data-go]');
+    if (g) go(g.dataset.go);
+  });
+
+  function stepNumbers() {
+    const total = anyPrivate() ? 4 : 3;
+    $('#stepSignin').textContent = 'Step 1 of ' + total;
+    $('#stepFolders').textContent = 'Step 2 of ' + total;
+    $('#stepDone').textContent = 'Step ' + total + ' of ' + total;
+  }
+
+  // ---------- sign in ----------
+  $('#signinBtn').addEventListener('click', () => {
+    const msg = $('#signinMsg');
+    msg.textContent = 'Checking your PikPak account…';
+    setTimeout(() => { msg.textContent = ''; go('folders'); }, 900);
+  });
+
+  // ---------- folder picker ----------
+  function renderFolders() {
+    const list = $('#folderList');
+    list.innerHTML = '';
+    folders.forEach((f, i) => {
+      const row = document.createElement('div');
+      row.className = 'frow' + (f.on ? '' : ' off');
+      row.innerHTML =
+        '<input type="checkbox" aria-label="Back up ' + f.name + '"' + (f.on ? ' checked' : '') + '>' +
+        '<div><div class="fname">' + f.name + '</div><div class="fpath">' + f.path + '</div></div>' +
+        '<div class="fsize">' + fmt(f.gb) + '</div>' +
+        '<label class="lock"><input type="checkbox"' + (f.priv ? ' checked' : '') + (f.on ? '' : ' disabled') + '> Private</label>';
+      row.querySelector('input').addEventListener('change', e => { f.on = e.target.checked; if (!f.on) f.priv = false; renderFolders(); });
+      row.querySelector('.lock input').addEventListener('change', e => { f.priv = e.target.checked; stepNumbers(); });
+      list.appendChild(row);
+    });
+    const used = chosenGB();
+    const over = used > CAP;
+    $('#spaceBar').classList.toggle('over', over);
+    $('#spaceBar i').style.width = Math.min(100, used / CAP * 100) + '%';
+    $('#spaceUsed').textContent = fmt(used) + ' of ' + CAP + ' GB';
+    const w = $('#spaceWarn');
+    w.hidden = !over;
+    w.textContent = over ? "That's " + fmt(used - CAP) + " more than your PikPak has room for. Untick something, or upgrade to PikPak Premium for more space." : '';
+    $('#foldersNext').disabled = over || used === 0;
+    stepNumbers();
+  }
+  $('#addFolder').addEventListener('click', () => {
+    if (!folders.some(f => f.name === 'Holiday Photos')) folders.push({ name: 'Holiday Photos', path: 'D:\\Holiday Photos', gb: 1.2, on: true, priv: false });
+    renderFolders();
+  });
+  $('#foldersNext').addEventListener('click', () => { go('key'); });
+
+  // ---------- recovery key ----------
+  $$('[data-keyact]').forEach(b => b.addEventListener('click', () => {
+    if (b.textContent === 'Copy') { try { navigator.clipboard.writeText($('#keyText').textContent); } catch (e) {} }
+    $('#keyMsg').textContent = '✓ ' + b.dataset.keyact;
+  }));
+  $('#keyKept').addEventListener('change', e => { $('#keyNext').disabled = !e.target.checked; });
+  $('#keyNext').addEventListener('click', () => { go('done'); });
+
+  function renderDone() {
+    const gb = chosenGB();
+    const evenings = Math.ceil(gb / 1);
+    $('#doneLead').textContent = gb <= 1
+      ? 'Your first backup takes a few minutes. After that, it runs every evening at 20:00 while your PC is on.'
+      : 'Your first backup is ' + fmt(gb) + '. PikPak lets a free account upload about 1 GB each evening, so it finishes in about ' + evenings + ' evenings. After that, only new and changed files are uploaded.';
+  }
+  $('#finish').addEventListener('click', () => { { homeState = 'first'; syncStateRadios(); go('home'); } });
+
+  // ---------- home ----------
+  const states = {
+    ok:      { label: 'All backed up', tone: '', h: 'Your files are backed up', p: 'Last backup: today at 20:14. Next backup: tomorrow at 20:00.', btn: 'Back up now', pill: ['Up to date', ''] },
+    running: { label: 'Backing up now', tone: '', h: 'Backing up now…', p: '312 of 690 files done. About 6 minutes left. You can keep using your PC.', bar: 45, btn: 'Pause', pill: ['Backing up', 'wait'] },
+    first:   { label: 'First backup, part-way', tone: '', h: 'Your first backup is on its way', p: '1.0 GB of 3.0 GB uploaded. PikPak lets a free account upload about 1 GB each evening, so this finishes in about 2 more evenings.', bar: 33, btn: 'Back up now', pill: ['Part-way', 'wait'] },
+    monthly: { label: 'Monthly limit reached', tone: 'warn', h: 'Backups are paused until 1 November', p: "You've uploaded 30 GB this month, the most PikPak allows apps on a free account. Nothing is lost. Backups carry on from where they stopped on the 1st.", pill: ['Waiting for the 1st', 'warn'], month: 100 },
+    full:    { label: 'PikPak is full', tone: 'bad', h: 'Your PikPak is full', p: "New and changed files can't be uploaded until there's room. Delete things you don't need in the PikPak app, or upgrade to Premium.", btn: 'Open PikPak', pill: ['Not backed up', 'bad'], space: 100 },
+    signin:  { label: 'Signed out by PikPak', tone: 'bad', h: 'PikPak signed you out', p: "Sign in again so tonight's backup can run. Your files on this PC and in PikPak are fine.", btn: 'Sign in again', pill: ['Waiting', 'warn'] },
+    deletes: { label: 'Lots of files deleted', tone: 'warn', h: 'Lots of files disappeared from Pictures', p: "1,204 files were deleted from Pictures on this PC since the last backup. We've paused this folder so nothing is removed from PikPak by mistake.", btn: 'Bring them back', btn2: 'I deleted them on purpose', pill: ['On hold', 'warn'], holdOnly: 'Pictures' }
+  };
+  let homeState = 'ok';
+
+  function renderHome() {
+    const s = states[homeState];
+    const st = $('#status');
+    st.className = 'status' + (s.tone ? ' ' + s.tone : '');
+    st.dataset.fb = 'Big status message (' + s.label + ')';
+    st.innerHTML = '<div><h3>' + s.h + '</h3><p>' + s.p + '</p>' +
+      (s.bar ? '<div class="bar"><i style="width:' + s.bar + '%"></i></div>' : '') + '</div>' +
+      '<div class="row-actions">' + (s.btn2 ? '<button class="btn">' + s.btn2 + '</button>' : '') +
+      (s.btn ? '<button class="btn btn-primary">' + s.btn + '</button>' : '') + '</div>';
+
+    const list = $('#homeFolders');
+    list.innerHTML = '';
+    folders.filter(f => f.on).forEach(f => {
+      let pill = s.pill;
+      if (s.holdOnly && f.name !== s.holdOnly) pill = ['Up to date', ''];
+      const row = document.createElement('div');
+      row.className = 'hrow';
+      row.innerHTML = '<div><div class="fname">' + f.name + (f.priv ? ' <span class="small">(private)</span>' : '') + '</div><div class="fpath">' + f.path + '</div></div>' +
+        '<span class="pill ' + pill[1] + '">' + pill[0] + '</span>';
+      list.appendChild(row);
+    });
+
+    const used = s.space ? CAP : Math.min(CAP, chosenGB());
+    $('#homeSpace').style.width = (used / CAP * 100) + '%';
+    $('#homeSpace').parentElement.classList.toggle('over', !!s.space);
+    $('#homeSpaceText').textContent = fmt(used) + ' of ' + CAP + ' GB used';
+    const m = s.month || 8;
+    $('#monthFill').style.width = m + '%';
+    $('#monthBar').classList.toggle('over', m >= 100);
+    $('#monthText').textContent = (m >= 100 ? '30' : '2.4') + ' GB of 30 GB';
+  }
+
+  function syncStateRadios() {
+    $$('#protoStates input').forEach(r => { r.checked = r.value === homeState; });
+  }
+  const ps = $('#protoStates');
+  Object.keys(states).forEach(k => {
+    const l = document.createElement('label');
+    l.innerHTML = '<input type="radio" name="hs" value="' + k + '"' + (k === homeState ? ' checked' : '') + '> ' + states[k].label;
+    l.querySelector('input').addEventListener('change', () => { homeState = k; go('home'); });
+    ps.appendChild(l);
+  });
+
+  // ---------- restore ----------
+  const deleted = [
+    ['Holiday 2024 001.jpg', 'Pictures', '25 Oct'],
+    ['Tax return 2025.pdf', 'Documents', '22 Oct'],
+    ['Shopping list.docx', 'Desktop', '19 Oct'],
+    ['Wedding speech (old version).docx', 'Documents', '3 Oct']
+  ];
+  function renderRestore() {
+    const list = $('#restoreList');
+    list.innerHTML = '';
+    deleted.forEach(d => {
+      const row = document.createElement('div');
+      row.className = 'lrow';
+      row.innerHTML = '<div><div class="fname">' + d[0] + '</div><div class="fpath">From ' + d[1] + '</div></div><span class="small">Deleted ' + d[2] + '</span><button class="btn">Restore</button>';
+      row.querySelector('button').addEventListener('click', e => {
+        e.target.outerHTML = '<span class="pill">Back in ' + d[1] + '</span>';
+      });
+      list.appendChild(row);
+    });
+  }
+
+  // ---------- offload / settings ----------
+  $('#offloadPick').addEventListener('click', () => {
+    $('#offloadMsg').textContent = '✓ Moved 3 files (4.2 GB) to your PikPak Archive. 4.2 GB freed on this PC.';
+  });
+  $('#showKey').addEventListener('click', () => {
+    const k = $('#keyAgain'); k.hidden = !k.hidden;
+    $('#showKey').textContent = k.hidden ? 'Show recovery key' : 'Hide recovery key';
+  });
+
+  // ---------- feedback mode ----------
+  const pop = $('#pop');
+  let target = null, verdict = null;
+  $('#fbToggle').addEventListener('click', () => {
+    const on = !document.body.classList.contains('fb');
+    document.body.classList.toggle('fb', on);
+    $('#fbToggle').setAttribute('aria-pressed', on);
+    $('#fbToggle').textContent = on ? 'Feedback mode is on: click to turn off' : 'Feedback mode is off: click to turn on';
+    if (!on) closePop();
+  });
+  document.addEventListener('click', e => {
+    if (!document.body.classList.contains('fb')) return;
+    if (e.target.closest('.proto') || e.target.closest('#pop')) return;
+    const el = e.target.closest('[data-fb]');
+    if (!el) return;
+    e.preventDefault(); e.stopPropagation();
+    target = el; verdict = null;
+    $('#popTitle').textContent = el.dataset.fb;
+    $('#popNote').value = '';
+    $$('#verdicts button').forEach(b => b.setAttribute('aria-pressed', 'false'));
+    const r = el.getBoundingClientRect();
+    pop.style.left = Math.max(12, Math.min(window.innerWidth - 312, r.left)) + 'px';
+    pop.style.top = Math.min(window.innerHeight - 220, r.bottom + 8) + 'px';
+    pop.classList.add('on');
+    $('#verdicts button').focus();
+  }, true);
+  $$('#verdicts button').forEach(b => b.addEventListener('click', () => {
+    verdict = b.dataset.v;
+    $$('#verdicts button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+  function closePop() { pop.classList.remove('on'); target = null; }
+  $('#popCancel').addEventListener('click', closePop);
+  $('#popSend').addEventListener('click', () => {
+    if (!target || (!verdict && !$('#popNote').value.trim())) return;
+    const item = target.dataset.fb, note = $('#popNote').value.trim();
+    if (window.brainstorm) window.brainstorm.send({ type: 'feedback', screen: current, item: item, verdict: verdict || 'Note', note: note });
+    target.classList.add('marked');
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="v"></span> <span class="i"></span>';
+    li.querySelector('.v').textContent = (verdict || 'Note') + ':';
+    li.querySelector('.i').textContent = item + (note ? ' (' + note + ')' : '');
+    $('#fbList').prepend(li);
+    closePop();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePop(); });
+})();
+</script>
+</body>
+</html>

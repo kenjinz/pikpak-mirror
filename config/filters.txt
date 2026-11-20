@@ -1,0 +1,7 @@
+- Thumbs.db
+- desktop.ini
+- ~$*
+- *.tmp
+- *.partial
+- $RECYCLE.BIN/**
+- System Volume Information/**

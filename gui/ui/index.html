@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PikPak Sync</title>
+  <link rel="stylesheet" href="app.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="preview-banner" id="previewBanner" role="status" hidden>Preview: nothing will be installed, saved or uploaded</div>
+<div class="app">
+
+  <div class="appbar" id="appbar" hidden>
+    <span class="appname">PikPak Sync</span>
+    <span class="row-actions">
+      <button class="btn btn-quiet" data-go="home">Home</button>
+      <button class="btn btn-quiet" data-go="settings">Settings</button>
+    </span>
+  </div>
+
+  <!-- ===== Start-up ===== -->
+  <section class="screen on" id="s-loading">
+    <p class="small" aria-live="polite">Loading&hellip;</p>
+  </section>
+
+  <!-- ===== Setup: welcome ===== -->
+  <section class="screen" id="s-welcome">
+    <div class="narrow">
+      <h3 class="title">Keep your folders in sync with PikPak</h3>
+      <p class="lead">Pick the folders you care about. Changes you make on this PC or in PikPak are copied to the other side every hour.</p>
+      <ul class="promises">
+        <li><b>Runs by itself</b>Every hour while your PC is on. You don't need to open this app.</li>
+        <li><b>Deleted something by mistake?</b>Anything deleted or overwritten by a sync is kept for 30 days.</li>
+        <li><b>Encrypted folders</b>Folders you mark encrypted are locked before they leave your PC. PikPak can't read them.</li>
+      </ul>
+      <button class="btn btn-primary" id="welcomeNext">Get started</button>
+    </div>
+  </section>
+
+  <!-- ===== Setup: sign in (also "sign in again" from Home) ===== -->
+  <section class="screen" id="s-signin">
+    <div class="narrow">
+      <p class="step" id="stepSignin">Step 1 of 3</p>
+      <h3 class="title" id="signinTitle">Sign in to PikPak</h3>
+      <p class="lead" id="signinLead">Use the same email and password as the PikPak app on your phone.</p>
+      <form id="signinForm" novalidate>
+        <label class="field"><span>Email</span><input type="email" id="signinEmail" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>Password</span><input type="password" id="signinPassword" autocomplete="off"></label>
+        <p class="note">Your password goes only to PikPak. It's kept on this PC so syncing can run while you're away.</p>
+        <p class="msg" id="signinMsg" aria-live="polite" hidden></p>
+        <div class="foot"><button class="btn" type="button" id="signinBack">Back</button><button class="btn btn-primary" type="submit" id="signinBtn">Sign in</button></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== Setup: choose folders ===== -->
+  <section class="screen" id="s-folders">
+    <div class="narrow" style="max-width:640px">
+      <p class="step" id="stepFolders">Step 2 of 3</p>
+      <h3 class="title">Choose what to sync</h3>
+      <p class="lead">We ticked the folders that fit in your PikPak. Untick anything you don't need.</p>
+      <div class="folders" id="folderList"></div>
+      <p class="msg" id="folderListMsg" aria-live="polite" hidden></p>
+      <div class="row-actions" style="margin-top:.6rem"><button class="btn btn-quiet" id="setupAddFolder">Add another folder</button></div>
+      <div class="space">
+        <div class="bar" id="setupSpaceBar"><i id="setupSpaceFill" style="width:0%"></i></div>
+        <div class="space-text"><span id="setupSpaceUsed"></span><span class="small" id="setupSpaceAcct"></span></div>
+        <div class="space-warn" id="setupSpaceWarn" hidden></div>
+      </div>
+      <p class="small" style="margin-top:.75rem">Mark a folder <b>Encrypted</b> to lock it with a recovery key before it's uploaded. Only this app, with that key, can open it.</p>
+      <div class="foot"><button class="btn" id="foldersBack">Back</button><button class="btn btn-primary" id="foldersNext" disabled>Continue</button></div>
+    </div>
+  </section>
+
+  <!-- ===== Setup: recovery key (option A) ===== -->
+  <section class="screen" id="s-key">
+    <div class="narrow">
+      <p class="step">Step 3 of 4</p>
+      <h3 class="title">Save your recovery key</h3>
+      <p class="lead">Your encrypted folders are locked with this key before they leave your PC. If this PC ever breaks, you'll need it to open them on a new one. Nobody else has a copy, not even PikPak.</p>
+      <div class="tag">
+        <div class="key" id="keyText"></div>
+        <div class="tagnote">No zeros or O's, no ones or L's, so it's easy to copy by hand.</div>
+      </div>
+      <p class="msg" id="keyLoadMsg" aria-live="polite" hidden></p>
+      <div class="row-actions" style="margin-bottom:1rem">
+        <button class="btn btn-primary" id="keySave">Save to a file&hellip;</button>
+        <button class="btn" id="keyPrint">Print</button>
+        <button class="btn" id="keyCopy">Copy</button>
+      </div>
+      <p class="done-msg" id="keyMsg" aria-live="polite"></p>
+      <label class="check"><input type="checkbox" id="keyKept"><span>I've kept it somewhere other than this PC, like a USB stick, my phone or on paper.</span></label>
+      <p class="small" style="margin:.6rem 0 0">You can see it again any time in Settings.</p>
+      <div class="foot"><button class="btn" id="keyBack">Back</button><button class="btn btn-primary" id="keyNext" disabled>Continue</button></div>
+    </div>
+  </section>
+
+  <!-- ===== Setup: done ===== -->
+  <section class="screen" id="s-done">
+    <div class="narrow">
+      <p class="step" id="stepDone">Step 3 of 3</p>
+      <h3 class="title" id="doneTitle">Setting up your PC</h3>
+      <p class="lead" id="doneLead"></p>
+      <p class="msg" id="doneProgress" aria-live="polite" hidden></p>
+      <div class="list steps" id="doneSteps" hidden></div>
+      <div id="donePreview" hidden>
+        <h4 class="section">What setup would do</h4>
+        <ul class="preview-lines" id="donePreviewList"></ul>
+      </div>
+      <div class="row-actions" id="doneActions" hidden>
+        <button class="btn btn-primary" id="doneStart">Start my first sync</button>
+      </div>
+      <div class="row-actions" id="doneRetryActions" style="margin-top:1rem" hidden>
+        <button class="btn" id="doneBack">Back</button>
+        <button class="btn btn-primary" id="doneRetry">Try again</button>
+      </div>
+      <p class="msg" id="doneMsg" aria-live="polite" hidden></p>
+      <div class="row-actions" id="doneHomeActions" style="margin-top:.75rem" hidden>
+        <button class="btn" id="doneHome">Go to home</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Home ===== -->
+  <section class="screen" id="s-home">
+    <div class="status" id="status">
+      <div><h3>Checking your folders&hellip;</h3><p></p></div>
+    </div>
+    <p class="msg" id="homeMsg" aria-live="polite" hidden></p>
+    <div class="home-grid">
+      <div>
+        <h4 class="section" style="margin-top:0">Synced folders</h4>
+        <div class="folders" id="homeFolders"></div>
+        <p class="msg" id="foldersMsg" aria-live="polite" hidden></p>
+        <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="addFolder">Add a folder</button></div>
+      </div>
+      <div class="side">
+        <div class="panel">
+          <h5>Space in your PikPak</h5>
+          <div class="bar" id="spaceBar"><i id="spaceFill" style="width:0%"></i></div>
+          <div class="space-text"><span id="spaceText">Checking&hellip;</span></div>
+        </div>
+        <div class="panel">
+          <h5>Uploaded this month</h5>
+          <div class="bar" id="monthBar"><i id="monthFill" style="width:0%"></i></div>
+          <div class="space-text"><span id="monthText">Checking&hellip;</span></div>
+          <p class="small" style="margin:.35rem 0 0">PikPak limits how much apps can upload each month. Syncing waits for the 1st if you reach it.</p>
+        </div>
+        <div class="panel">
+          <h5>Shortcuts</h5>
+          <div class="links">
+            <button class="btn btn-quiet" id="openPikpak">Open PikPak in my browser</button>
+            <button class="btn btn-quiet" data-go="restore">Get back a deleted file</button>
+          </div>
+          <p class="msg" id="shortcutMsg" aria-live="polite" hidden></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Restore deleted files ===== -->
+  <section class="screen" id="s-restore">
+    <h3 class="title">Get back a deleted file</h3>
+    <p class="lead">Files deleted or overwritten by a sync are kept for 30 days. Pick one to put it back where it was.</p>
+    <input class="search" id="restoreSearch" type="search" placeholder="Search by file name" aria-label="Search by file name">
+    <p class="msg" id="restoreMsg" aria-live="polite" hidden></p>
+    <div class="list" id="restoreList"></div>
+    <div class="foot"><button class="btn" data-go="home">Back to home</button><span></span></div>
+  </section>
+
+  <!-- ===== Settings ===== -->
+  <section class="screen" id="s-settings">
+    <div class="narrow" style="max-width:640px">
+      <h3 class="title">Settings</h3>
+      <p class="msg" id="setLoadMsg" aria-live="polite" hidden></p>
+
+      <h4 class="section">Syncing</h4>
+      <div class="set">
+        <div class="srow"><label for="setPause"><span>Pause syncing<span class="small">Nothing syncs until you switch this off.</span></span></label><input type="checkbox" class="switch" id="setPause"></div>
+        <div class="srow"><label for="setEvery"><span>How often to sync</span></label><select id="setEvery">
+          <option value="15">Every 15 minutes</option><option value="30">Every 30 minutes</option><option value="60">Every hour</option>
+          <option value="180">Every 3 hours</option><option value="360">Every 6 hours</option><option value="0">Once a day</option></select></div>
+        <div class="srow" id="setTimeRow" hidden><label for="setTime"><span>What time of day</span></label><select id="setTime"></select></div>
+        <div class="srow"><label for="setLogon"><span>Also sync soon after I turn on my PC<span class="small">15 minutes after you sign in to Windows.</span></span></label><input type="checkbox" class="switch" id="setLogon"></div>
+        <div class="srow"><label for="setBw"><span>Go easy on my internet in the evening<span class="small" id="setBwNote">Uploads slowly in the evening so videos and calls don't stutter.</span></span></label><input type="checkbox" class="switch" id="setBw"></div>
+      </div>
+      <p class="msg" id="setMsg" aria-live="polite" hidden></p>
+
+      <h4 class="section">Encrypted folders</h4>
+      <div class="set" id="setPrivList"></div>
+      <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="setAddPrivate">Add encrypted folder</button></div>
+      <p class="msg" id="setPrivMsg" aria-live="polite" hidden></p>
+
+      <h4 class="section">Encrypted folders in PikPak</h4>
+      <div class="set" id="setRemoteList"><div class="srow empty">Press Show to see the encrypted folders in PikPak.</div></div>
+      <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="setRemoteShow">Show</button></div>
+      <p class="msg" id="setRemoteMsg" aria-live="polite" hidden></p>
+
+      <h4 class="section">Recovery key</h4>
+      <div class="set">
+        <div class="srow"><span>You need this to open your encrypted folders on another PC.</span><button class="btn" id="setShowKey">Show recovery key</button></div>
+        <div id="setKeyBox" hidden style="padding:.2rem 0 .8rem">
+          <div id="setKeyTags"></div>
+          <div class="row-actions">
+            <button class="btn" id="setKeySave">Save to a file&hellip;</button>
+            <button class="btn" id="setKeyPrint">Print</button>
+            <button class="btn" id="setKeyCopy">Copy</button>
+          </div>
+        </div>
+      </div>
+      <p class="msg" id="setKeyMsg" aria-live="polite" hidden></p>
+
+      <h4 class="section">Windows</h4>
+      <div class="set">
+        <div class="srow"><label for="setAutostart"><span>Start PikPak Sync when I sign in to Windows<span class="small">It waits quietly in the tray icon.</span></span></label><input type="checkbox" class="switch" id="setAutostart"></div>
+      </div>
+      <p class="msg" id="setAutoMsg" aria-live="polite" hidden></p>
+
+      <h4 class="section">PikPak account</h4>
+      <div class="set">
+        <div class="srow"><span id="setAccount">Checking&hellip;</span></div>
+      </div>
+
+      <details class="adv" id="setAdv">
+        <summary>Advanced</summary>
+        <div class="set" style="margin-top:.6rem">
+          <div class="srow"><label for="advRun"><span>Transfer limit per day (GB)</span></label><input class="num" id="advRun" inputmode="numeric" autocomplete="off"></div>
+          <div class="srow"><label for="advMonth"><span>Transfer limit per month (GB)</span></label><input class="num" id="advMonth" inputmode="numeric" autocomplete="off"></div>
+          <div class="srow"><label for="advDays"><span>Keep deleted files for (days)</span></label><input class="num" id="advDays" inputmode="numeric" autocomplete="off"></div>
+          <div class="srow"><label for="advDelete"><span>Stop and ask me if a sync would delete more than (% of a folder)</span></label><input class="num" id="advDelete" inputmode="numeric" autocomplete="off"></div>
+          <div class="srow"><label for="advBwFrom"><span>Go easy on my internet from<span class="small" id="advBwNote"></span></span></label><input class="num" id="advBwFrom" placeholder="18:00" autocomplete="off"></div>
+          <div class="srow"><label for="advBwTo"><span>until</span></label><input class="num" id="advBwTo" placeholder="23:00" autocomplete="off"></div>
+          <div class="srow"><label for="advHolding"><span>Folder for deleted files on this PC</span></label><span class="pathfield"><input id="advHolding" autocomplete="off" spellcheck="false"><button class="btn" id="advHoldingBrowse">Browse&hellip;</button></span></div>
+        </div>
+        <div class="row-actions" style="margin-top:.6rem"><button class="btn btn-primary" id="advSave">Save changes</button></div>
+        <p class="msg" id="advMsg" aria-live="polite" hidden></p>
+      </details>
+
+      <div class="foot"><button class="btn" data-go="home">Back to home</button><span></span></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- recovery key sheet: only printed, never on screen; filled just before printing and emptied afterwards -->
+<div class="key-sheet" id="keySheet" aria-hidden="true"></div>
+
+<!-- confirm box (in-page, so it follows the app's look) -->
+<dialog class="modal" id="confirmBox" aria-labelledby="confirmTitle">
+  <h6 id="confirmTitle"></h6>
+  <div class="modal-body" id="confirmBody"></div>
+  <div class="row-actions"><button class="btn" id="confirmCancel">Cancel</button><button class="btn btn-primary" id="confirmOk">OK</button></div>
+</dialog>
+</body>
+</html>
