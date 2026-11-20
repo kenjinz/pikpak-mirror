@@ -54,10 +54,14 @@ it. It is one file: the scripts are inside it, so there is nothing to install an
   (setup downloads rclone).
 - The first time it runs, it unpacks its scripts to `%LOCALAPPDATA%\PikPakSync`. Your settings live in
   `%LOCALAPPDATA%\PikPakSync\config\mirror.config.psd1`; sync state and logs stay in `%LOCALAPPDATA%\PikPakMirror`.
-  The scheduled task runs the scripts from `%LOCALAPPDATA%\PikPakSync`, so the downloaded `.exe` can be moved or
-  deleted afterwards.
-- **Update:** run the new `.exe`. It replaces the scripts and keeps your settings (including an edited
-  `config\filters.txt`).
+  The scheduled task runs the scripts from `%LOCALAPPDATA%\PikPakSync`, so syncing does not need the downloaded
+  `.exe` afterwards. The tray app does: if you switch on **Start PikPak Sync when I sign in to Windows**, Windows
+  starts that exact file, so keep it in a permanent place (not Downloads). If you move it later, switch that
+  setting off and on again.
+- **Update:** quit PikPak Sync from the tray icon (**Quit**), then run the new `.exe`. It replaces the scripts and
+  keeps your settings (including an edited `config\filters.txt`). An older `.exe` never replaces the scripts of a
+  newer one, so starting an old copy by mistake does no harm to the engine. If start-with-Windows is on, switch it
+  off and on again from the new `.exe` so Windows starts the new file.
 - **Check the download:** compare `(Get-FileHash .\PikPak-Sync-*.exe -Algorithm SHA256).Hash` with the `.sha256`
   file on the Releases page.
 - Which scripts an `.exe` uses, in this order: the folder in `PIKPAK_BACKUP_REPO` if it is set; else the project

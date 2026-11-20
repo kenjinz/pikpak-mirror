@@ -12,7 +12,8 @@ Early release: so far it has been used on one Windows 11 PC.
 - It needs the **Microsoft WebView2 runtime**. Windows 11 and current Windows 10 already have it.
 - The first run needs **internet**: setup downloads rclone (a pinned version, checked against its SHA-256).
 - Where it keeps things: the app's scripts in `%LOCALAPPDATA%\PikPakSync` (your settings are in `config` there and are never overwritten by an update), and logs and sync state in `%LOCALAPPDATA%\PikPakMirror`.
-- To update, download the new `.exe` and run it. Your settings stay.
+- Keep the `.exe` somewhere permanent (not Downloads) if you turn on "Start PikPak Sync when I sign in to Windows": Windows starts that exact file.
+- To update, quit PikPak Sync from the tray icon, then run the new `.exe`. Your settings stay, and an older `.exe` never replaces a newer one's scripts.
 
 ## Check your download
 
