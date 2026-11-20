@@ -44,6 +44,27 @@ sync, sets up a new PC, adds and removes folders, pauses syncing, sets how often
 brings back deleted files. It uses the same scripts and the same config file as the rest of this guide, so you
 can use the app, the commands, or both. Every manual way below still works.
 
+### Download and run (most people)
+
+Download `PikPak-Sync-v<version>-windows-x64.exe` from the **Releases** page of the repository and double-click
+it. It is one file: the scripts are inside it, so there is nothing to install and no folder to keep next to it.
+
+- Windows SmartScreen warns about the file because it is not code-signed. Click **More info**, then **Run anyway**.
+- It needs the Microsoft WebView2 runtime (Windows 11 and current Windows 10 have it) and, on the first run, internet
+  (setup downloads rclone).
+- The first time it runs, it unpacks its scripts to `%LOCALAPPDATA%\PikPakSync`. Your settings live in
+  `%LOCALAPPDATA%\PikPakSync\config\mirror.config.psd1`; sync state and logs stay in `%LOCALAPPDATA%\PikPakMirror`.
+  The scheduled task runs the scripts from `%LOCALAPPDATA%\PikPakSync`, so the downloaded `.exe` can be moved or
+  deleted afterwards.
+- **Update:** run the new `.exe`. It replaces the scripts and keeps your settings (including an edited
+  `config\filters.txt`).
+- **Check the download:** compare `(Get-FileHash .\PikPak-Sync-*.exe -Algorithm SHA256).Hash` with the `.sha256`
+  file on the Releases page.
+- Which scripts an `.exe` uses, in this order: the folder in `PIKPAK_BACKUP_REPO` if it is set; else the project
+  folder above the `.exe` (a build made in the project); else the scripts inside the `.exe`.
+
+### Build it yourself (developers)
+
 **Build it** (once, or after the code changes). Open PowerShell in the project's `gui` folder
 (`G:\pikpak-mirror\gui`) and run:
 
@@ -56,16 +77,16 @@ This produces:
 - the app: `gui\src-tauri\target\release\pikpak-backup.exe`. **This is the file to run.** The name still says
   "backup" on purpose; the window and the tray say PikPak Sync;
 - an installer under `gui\src-tauri\target\release\bundle\nsis\`. It adds a **Start-menu shortcut** called
-  **PikPak Sync**. The installed copy lives outside the project folder and can't find the scripts by itself, so
-  **for the installed copy the user environment variable `PIKPAK_BACKUP_REPO` is required**. Set it to the
-  project folder before you start the installed app:
-  `[Environment]::SetEnvironmentVariable('PIKPAK_BACKUP_REPO', 'G:\pikpak-mirror', 'User')`
+  **PikPak Sync**. The installed copy lives outside the project folder, so it uses the scripts built into it (and
+  its own settings in `%LOCALAPPDATA%\PikPakSync`), **unless** the user environment variable `PIKPAK_BACKUP_REPO` is
+  set. To make the installed copy use this project folder (your live setup), set it before you start the installed
+  app: `[Environment]::SetEnvironmentVariable('PIKPAK_BACKUP_REPO', 'G:\pikpak-mirror', 'User')`
 
 **Start it** from the Start-menu shortcut, or by running `pikpak-backup.exe` from the folder above.
 
 - The `.exe` in `gui\src-tauri\target\release\` finds the scripts by looking upward from where it is. Any other
-  copy of the `.exe` (the installed one, or one you moved) needs `PIKPAK_BACKUP_REPO` set to
-  `G:\pikpak-mirror`, as above.
+  copy of the `.exe` (the installed one, or one you moved) uses its built-in scripts, unless `PIKPAK_BACKUP_REPO`
+  is set to `G:\pikpak-mirror`, as above.
 - **Try the setup without changing anything:** `pikpak-backup.exe --preview-setup`. It walks through every setup
   screen and changes nothing on this PC or in PikPak.
 - Close the window and the app keeps running in the tray (next to the clock). Right-click the tray icon for

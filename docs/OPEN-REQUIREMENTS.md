@@ -25,7 +25,7 @@ Numbers are kept from earlier versions of this list; R4 and V5 no longer exist (
 | R12 | **Apply deletes once.** For a folder stopped by the delete safety stop (more than 10% would be deleted), a way to let that one sync carry out the deletes. Not built; waiting for the owner's decision. | The owner may delete many encrypted files in a second app. Today the only ways are Repair, which brings the files back, or raising the percentage in Settings, Advanced for one sync and setting it back. | Medium, waiting for the owner's decision |
 | R8 | **Restoring encrypted files from the app.** | **Covered.** An encrypted folder is brought back with **Repair**, and files deleted from it are in **Get back a deleted file**. Still to confirm live: V12 to V14. | Done, pending live check |
 | R9 | **Change account / sign out**, and **remove the app** from Settings. | Needs a safe way to change the rclone remotes and tasks. Use `rclone config` and README "Remove everything". | Low |
-| R10 | **A real installer for other PCs.** | `cargo tauri build` makes an installer, but setting up a second PC is untested and needs a spare account or a VM. | Low |
+| R10 | **Setting up a second PC from the downloaded `.exe`.** | The single-file release (GitHub Actions builds `PikPak-Sync-v<version>-windows-x64.exe`; scripts are built into it and unpack to `%LOCALAPPDATA%\PikPakSync`) is built and checked on this PC only. A real first run on another PC is untested and needs a spare account or a VM. | Low |
 | R11 | **Linux and macOS.** | The engine is Windows PowerShell 5.1 only. | Low |
 
 (R2, the storage-full check, also belongs here: the app cannot warn about a full account either.)
