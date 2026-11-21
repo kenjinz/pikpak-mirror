@@ -1,6 +1,6 @@
 [package]
 name = "pikpak-backup"
-version = "0.1.0"
+version = "0.2.0"
 description = "PikPak Backup desktop app (thin shell over the PikPak Mirror PowerShell engine)"
 edition = "2021"
 rust-version = "1.90"
