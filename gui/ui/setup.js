@@ -1,4 +1,6 @@
 // First-time setup: Welcome -> Sign in -> Choose folders -> Recovery key (only with an encrypted folder) -> Done.
+// After sign-in, restore.js first looks in PikPak for an earlier install's folders (Recovery key of that install,
+// Found your folders); Done then restores them, and nothing found goes on to Choose folders.
 // The sign-in screen doubles as "Sign in again" when Home finds that PikPak signed the user out.
 //
 // The recovery key lives only in `setup.key` and on the key screen until setup finishes. It goes nowhere
@@ -8,6 +10,7 @@
 
 import { callFull, pickFolder, pickSaveFile, writeTextFile, copyText } from './bridge.js';
 import { ELLIPSIS, CHECK, GIB, $, h, asList, say, messageOf, fmtSize, baseName, keyGroups, keySheetLines, keySheetText, fillKeySheet, clearKeySheet } from './util.js';
+import * as restore from './restore.js';
 
 const KEY_FILE_NAME = 'PikPak recovery key.txt';
 const MEASURE_SECONDS = 20;
@@ -34,7 +37,7 @@ const setup = {
 
 const isPreview = () => !!(setup.hooks && setup.hooks.preview());
 const chosenRows = () => (setup.rows || []).filter(r => r.on);
-const anyPrivate = () => chosenRows().some(r => r.priv);
+const anyPrivate = () => !restore.active() && chosenRows().some(r => r.priv);
 
 function freeBytes() {
   const a = setup.account;
@@ -58,7 +61,7 @@ function chosenTotal() {
 }
 
 function updateStepNumbers() {
-  const total = anyPrivate() ? 4 : 3;
+  const total = restore.stepTotal() || (anyPrivate() ? 4 : 3);
   $('#stepSignin').textContent = 'Step 1 of ' + total;
   $('#stepFolders').textContent = 'Step 2 of ' + total;
   $('#stepDone').textContent = 'Step ' + total + ' of ' + total;
@@ -136,7 +139,8 @@ async function signIn() {
   setup.signinPreview = previewLines;
   // Another account (or different free space): tick again what fits, keeping what the user chose.
   if (before && freeBytesOf(before) !== freeBytes()) preTick();
-  setup.hooks.go('folders');
+  // An earlier install's folders (backup or ID files) and encrypted folders come first; nothing found: Choose folders.
+  restore.afterSignin(setup.account);
 }
 
 function freeBytesOf(a) {
@@ -424,9 +428,16 @@ function showDone() {
 }
 
 function finishArgs(resume) {
+  const preset = setup.account ? setup.account.preset : 'free';
+  // A restore: the earlier install's folders and settings instead of the chosen folders; no new key.
+  if (restore.active()) {
+    const args = { restore: restore.restoreArg(), preset };
+    if (resume) args.resume = true;
+    return args;
+  }
   const args = {
     folders: chosenRows().map(r => ({ path: r.path, private: !!r.priv })),
-    preset: setup.account ? setup.account.preset : 'free'
+    preset
   };
   if (anyPrivate() && setup.key) args.recoveryKey = setup.key;
   if (resume) args.resume = true;
@@ -494,7 +505,7 @@ async function runFinish(resume) {
   $('#doneTitle').textContent = "You're all set";
   $('#doneLead').textContent = firstSyncSentence();
   if (preview) {
-    $('#donePreviewList').replaceChildren(...[...setup.signinPreview, ...previewLines].map(t => h('li', { text: t })));
+    $('#donePreviewList').replaceChildren(...[...setup.signinPreview, ...restore.previewLines(), ...previewLines].map(t => h('li', { text: t })));
     $('#donePreview').hidden = false;
   } else {
     renderSteps(steps, null);
@@ -562,6 +573,10 @@ function renderFinishFailed(steps, failed, message) {
 
 /** "takes about N days": N = ceil(chosen GB / DailyBudgetGB of the preset). */
 function firstSyncSentence() {
+  if (restore.active()) {
+    return 'Your folders come down from PikPak over the first syncs (about ' + fmtSize(restore.restoreBytes())
+      + '). After that, it runs every hour while your PC is on.';
+  }
   const t = chosenTotal();
   const preset = setup.account && setup.account.preset === 'premium' ? 'premium' : 'free';
   const budget = DAILY_BUDGET_GB[preset];
@@ -625,7 +640,7 @@ export function wireSetup() {
   $('#keyBack').addEventListener('click', () => go('folders'));
   $('#keyNext').addEventListener('click', () => { if (setup.key && $('#keyKept').checked) go('done'); });
   $('#doneRetry').addEventListener('click', () => runFinish(true));
-  $('#doneBack').addEventListener('click', () => go('folders'));
+  $('#doneBack').addEventListener('click', () => go(restore.active() ? 'found' : 'folders'));
   $('#doneStart').addEventListener('click', startFirstSync);
   $('#doneHome').addEventListener('click', () => setup.hooks.afterSetup('', 'quiet'));
   // The printed sheet is only needed while printing.

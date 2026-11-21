@@ -15,6 +15,21 @@ const TIMED_OUT = Object.freeze({
 // Preview mode (app started with --preview-setup): every call asks for a preview.
 let previewAll = false;
 
+// Actions that change the config: once one has worked (not under preview), the folder list backup in PikPak is
+// brought up to date in the background (backup.push uploads only when the list changed).
+const PUSH_AFTER = new Set([
+  'config.save', 'folders.add', 'folders.remove', 'folders.convert', 'folders.pause', 'folders.resume',
+  'folders.locate', 'folders.adopt', 'folders.newId', 'folders.ensureIds', 'private.add', 'private.remove',
+  'private.restore', 'schedule.set'
+]);
+
+/** Fire and forget: a failed backup upload never fails the change that came before it. */
+function pushBackup() {
+  call('backup.push')
+    .then(d => { if (d && d.error) console.warn('backup.push did not upload:', String(d.error)); })
+    .catch(e => console.warn('backup.push failed:', e && e.message ? e.message : e));
+}
+
 /** Turns preview mode on for every later call (the Rust side enforces it too). */
 export function setPreviewAll(on) {
   previewAll = on === true;
@@ -37,14 +52,16 @@ export function invoke(cmd, args = {}) {
  */
 export async function callFull(action, args = {}, { preview } = {}) {
   let envelope;
+  const asPreview = preview === true || previewAll;
   try {
-    envelope = await invoke('gui_action', { action, args: args || {}, preview: preview === true || previewAll });
+    envelope = await invoke('gui_action', { action, args: args || {}, preview: asPreview });
   } catch (e) {
     // The rejection is the Rust side's own text ("internal: ..."), never the request or its secrets.
     console.error('gui_action ' + action + ' failed:', e);
     throw e === 'internal: timed out' ? { ...TIMED_OUT } : { ...HELPER_FAILED };
   }
   if (envelope && envelope.ok === true) {
+    if (!asPreview && PUSH_AFTER.has(action)) pushBackup();
     return { data: envelope.data, warning: envelope.warning || null };
   }
   const err = (envelope && envelope.error) || {};

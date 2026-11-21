@@ -70,7 +70,7 @@ function Get-GuiKeyArgs {
 
 function Get-GuiEncryptedRestoreList {
     # The encrypted folders the key opens: @{ source = 'backup'|'idfiles'; folders = @(@{ name; id; lastPath; paused;
-    # entry }) }. From the companion file in the encrypted remote when it is a valid backup that lists at least one
+    # entry; resolved }) } (resolved: where lastPath goes on this PC, as a Pair's Resolved). From the companion file in the encrypted remote when it is a valid backup that lists at least one
     # folder (entry = the raw entry of the config); otherwise one row per folder in the remote with its ID file
     # (entry = $null).
     param([Parameter(Mandatory)][hashtable]$Ctx)
@@ -85,7 +85,7 @@ function Get-GuiEncryptedRestoreList {
                 if ($e -isnot [hashtable] -or [string]::IsNullOrWhiteSpace([string]$e['Name'])) { continue }
                 $id = $null; if (-not [string]::IsNullOrEmpty([string]$e['Id'])) { $id = [string]$e['Id'] }
                 $last = $null; if (-not [string]::IsNullOrEmpty([string]$e['Path'])) { $last = [string]$e['Path'] }
-                $rows.Add(@{ name = [string]$e['Name']; id = $id; lastPath = $last; paused = ($e['Paused'] -eq $true); entry = $e })
+                $rows.Add(@{ name = [string]$e['Name']; id = $id; lastPath = $last; paused = ($e['Paused'] -eq $true); entry = $e; resolved = (Get-GuiRestorePathInfo -Path $last) })
             }
             # A companion file that lists no encrypted folder says nothing about what PikPak holds.
             if ($rows.Count -gt 0) { return @{ source = 'backup'; folders = $rows.ToArray() } }
@@ -108,7 +108,7 @@ function Get-GuiEncryptedRestoreList {
             $id = [string]$found.Marker.Id
             if (-not [string]::IsNullOrEmpty([string]$found.Marker.LastPath)) { $last = [string]$found.Marker.LastPath }
         }
-        $rows.Add(@{ name = $n; id = $id; lastPath = $last; paused = $false; entry = $null })
+        $rows.Add(@{ name = $n; id = $id; lastPath = $last; paused = $false; entry = $null; resolved = (Get-GuiRestorePathInfo -Path $last) })
     }
     @{ source = 'idfiles'; folders = $rows.ToArray() }
 }

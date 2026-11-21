@@ -1,12 +1,13 @@
 // PikPak Sync page: a small router and one show/render function per screen.
 // Home, Get back a deleted file and Free up space are built here; the first-time setup screens live in
-// setup.js; Settings lives in settings.js.
+// setup.js (and restore.js for an earlier install's folders); Settings lives in settings.js.
 // No inline handlers (the CSP blocks them): every handler is attached with addEventListener.
 
 import { call, callFull, invoke, openPath, openUrl, listen, setPreviewAll } from './bridge.js';
 import { ELLIPSIS, GIB, $, $$, h, asList, say, messageOf, fmtSize, fmtDay, baseName } from './util.js';
 import { initFolderBoxes, addFolder, addEncryptedFolder, pauseFolder, locateFolder, adoptFolder, giveNewId, chooseSameId } from './folders.js';
 import { setupScreens, wireSetup } from './setup.js';
+import { restoreScreens, wireRestore } from './restore.js';
 import { pikpakTip, copyPikpakName } from './pikpak-name.js';
 import { settingsScreen, wireSettings, settingsTrayChanged } from './settings.js';
 
@@ -81,6 +82,7 @@ const setupHooks = {
   current: () => app.current,
   preview: () => !!(app.info && app.info.preview_setup),
   pcName: () => (app.info && app.info.pc_name) || '',
+  confirmBox: opts => confirmBox(opts),
   /** Setup is done (or skipped to Home): Home starts polling; `text` is shown under its status. */
   afterSetup(text, kind) {
     home.started = true;
@@ -102,6 +104,7 @@ const screens = {
   // `setup` is the entry: the welcome screen, or with {signin: true} the sign-in screen in "sign in again" mode.
   setup: { show: params => go(params.signin ? 'signin' : 'welcome', { again: !!params.signin }) },
   ...setupScreens(setupHooks),
+  ...restoreScreens(setupHooks),
   home: { show: showHome, inApp: true },
   restore: { show: showRestore, inApp: true },
   settings: settingsScreen({
@@ -254,6 +257,16 @@ function renderStatusBlock() {
   const parts = [h('div', {}, h('h3', { text: title }), h('p', { text: detail }))];
   if (actions.length) parts.push(h('div', { class: 'row-actions' }, actions));
   st.replaceChildren(...parts);
+  renderBackupNote();
+}
+
+/** The quiet note when the folder list hasn't reached PikPak for a while (status.backup.stale). */
+function renderBackupNote() {
+  const el = $('#homeBackupNote');
+  const b = !home.error && home.status && home.status.backup;
+  const since = b && b.stale === true ? fmtDay(String(b.failingSince || '').slice(0, 10)) : '';
+  el.textContent = since ? "Your folder list couldn't be backed up to PikPak since " + since + '.' : '';
+  el.hidden = !since;
 }
 
 async function backUpNow(btn) {
@@ -733,6 +746,7 @@ function wire() {
     refreshSoon: () => pollSoon()
   });
   wireSetup();
+  wireRestore();
   wireSettings();
   $('#addFolder').addEventListener('click', () => addFolder());
   $('#openPikpak').addEventListener('click', ev => openPikpak(ev.currentTarget));

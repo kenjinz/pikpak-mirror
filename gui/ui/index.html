@@ -54,6 +54,40 @@
     </div>
   </section>
 
+  <!-- ===== Setup: the recovery key of an earlier install (only when PikPak holds encrypted folders) ===== -->
+  <section class="screen" id="s-oldkey">
+    <div class="narrow">
+      <p class="step" id="stepOldkey">Step 2 of 4</p>
+      <h3 class="title">Your PikPak has encrypted folders</h3>
+      <p class="lead">Type your recovery key to open them.</p>
+      <form id="oldkeyForm" novalidate>
+        <label class="field"><span id="oldkeyLabel">Recovery key</span><input type="text" id="oldkeyKey" autocomplete="off" spellcheck="false" autocapitalize="characters"></label>
+        <label class="field" id="oldkeySaltRow" hidden><span>Salt</span><input type="password" id="oldkeySalt" autocomplete="off" spellcheck="false"></label>
+        <p class="msg" id="oldkeyMsg" aria-live="polite" hidden></p>
+        <div class="row-actions"><button class="btn btn-quiet" type="button" id="oldkeyPairLink">My key is a password and a salt</button></div>
+        <div class="row-actions" style="margin-top:.4rem"><button class="btn btn-quiet" type="button" id="oldkeySkip">I don't have my key</button></div>
+        <div class="foot"><button class="btn" type="button" id="oldkeyBack">Back</button><button class="btn btn-primary" type="submit" id="oldkeyCheck">Check key</button></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== Setup: the folders of an earlier install, from the backup or the ID files ===== -->
+  <section class="screen" id="s-found">
+    <div class="narrow" style="max-width:640px">
+      <p class="step" id="stepFound">Step 2 of 3</p>
+      <h3 class="title" id="foundTitle">Found your folders in PikPak</h3>
+      <p class="lead" id="foundLead"></p>
+      <p class="note" id="foundNote" hidden></p>
+      <div class="folders" id="foundList"></div>
+      <p class="msg" id="foundMsg" aria-live="polite" hidden></p>
+      <p id="foundTotal" style="margin:.9rem 0 0;font-size:13px" aria-live="polite" hidden></p>
+      <div class="foot">
+        <span class="row-actions"><button class="btn" id="foundBack">Back</button><button class="btn" id="foundFresh" hidden>Start fresh instead</button></span>
+        <button class="btn btn-primary" id="foundRestore" hidden>Restore</button>
+      </div>
+    </div>
+  </section>
+
   <!-- ===== Setup: choose folders ===== -->
   <section class="screen" id="s-folders">
     <div class="narrow" style="max-width:640px">
@@ -127,6 +161,7 @@
     <div class="status" id="status">
       <div><h3>Checking your folders&hellip;</h3><p></p></div>
     </div>
+    <p class="small" id="homeBackupNote" style="margin:.5rem 0 0" hidden></p>
     <p class="msg" id="homeMsg" aria-live="polite" hidden></p>
     <div class="home-grid">
       <div>

@@ -2844,6 +2844,19 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             $f[1].lastPath | Should -BeNullOrEmpty
         }
 
+        It 'says where each encrypted folder goes on this PC' {
+            $script:KeyDirs = @('Photos/', 'Videos/')
+            Mock Resolve-RestorePath { @{ Path = 'X:\New\Photos'; Moved = $true; DriveMissing = $false } }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $f = @($r.data.folders)
+            $f[0].resolved.Path | Should -Be 'X:\New\Photos'
+            $f[0].resolved.DriveMissing | Should -BeFalse
+            Should -Invoke Resolve-RestorePath -Times 1 -Exactly -ParameterFilter { $Path -eq 'D:\Old\Photos' }
+            # No ID file: no last path, so a place must be chosen.
+            $f[1].resolved.Path | Should -BeNullOrEmpty
+            $f[1].resolved.DriveMissing | Should -BeTrue
+        }
+
         It 'falls back to the ID files when the companion file is not a backup' {
             Mock Invoke-GuiRclone { New-RcloneResult -Output @('this is not json') } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'private:.pikpak-sync-encrypted.json' }
             $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
