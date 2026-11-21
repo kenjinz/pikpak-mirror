@@ -1,6 +1,7 @@
 // First-time setup: Welcome -> Sign in -> Choose folders -> Recovery key (only with an encrypted folder) -> Done.
 // After sign-in, restore.js first looks in PikPak for an earlier install's folders (Recovery key of that install,
-// Found your folders); Done then restores them, and nothing found goes on to Choose folders.
+// Found your folders); Done then restores them, and nothing found goes on to Choose folders. A backup found in PikPak
+// is restored without a list: Done runs setup.finish at once and says what was restored.
 // The sign-in screen doubles as "Sign in again" when Home finds that PikPak signed the user out.
 //
 // The recovery key lives only in `setup.key` and on the key screen until setup finishes. It goes nowhere
@@ -446,6 +447,8 @@ function finishArgs(resume) {
 
 function resetDone() {
   $('#doneLead').textContent = '';
+  $('#doneRestored').hidden = true;
+  $('#doneRestored').replaceChildren();
   for (const id of ['#doneSteps', '#donePreview', '#doneActions', '#doneRetryActions', '#doneHomeActions']) $(id).hidden = true;
   say('doneMsg', '');
   say('doneProgress', '');
@@ -503,6 +506,7 @@ async function runFinish(resume) {
   setup.finished = true;
   forgetKey();
   $('#doneTitle').textContent = "You're all set";
+  renderRestored(data.restored);
   $('#doneLead').textContent = firstSyncSentence();
   if (preview) {
     $('#donePreviewList').replaceChildren(...[...setup.signinPreview, ...restore.previewLines(), ...previewLines].map(t => h('li', { text: t })));
@@ -571,11 +575,35 @@ function renderFinishFailed(steps, failed, message) {
   if (!$('#doneRetry').disabled) $('#doneRetry').focus();
 }
 
+/** The day the backup was saved as the browser shows dates; '' when there is none or it can't be read. */
+function savedDay(saved) {
+  const d = new Date(String(saved || ''));
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+}
+
+/**
+ * What a restore did (setup.finish's `restored`): how many folders came back and which still wait. Only shown when this
+ * setup is a restore: a normal setup that is resumed gets a `restored` too and says nothing of it.
+ */
+function renderRestored(restored) {
+  const box = $('#doneRestored');
+  if (!restore.active() || !restored) { box.hidden = true; box.replaceChildren(); return; }
+  const count = Number(restored.count) || 0;
+  const day = savedDay(restored.saved);
+  const lines = ['Restored ' + count + (count === 1 ? ' folder' : ' folders') + ' from your backup' + (day ? ' of ' + day : '') + '.'];
+  const drives = asList(restored.driveMissing).map(String);
+  const paused = asList(restored.pausedForKey).map(String);
+  if (drives.length) lines.push('Waiting for a drive: ' + drives.join(', ') + '.');
+  if (paused.length) lines.push('Paused until you enter your recovery key: ' + paused.join(', ') + '.');
+  for (const p of asList(restored.problems)) lines.push(String((p && p.name) || '') + ': ' + String((p && p.reason) || ''));
+  box.replaceChildren(...lines.map(t => h('p', { class: 'lead', style: 'margin-bottom:.5rem', text: t })));
+  box.hidden = false;
+}
+
 /** "takes about N days": N = ceil(chosen GB / DailyBudgetGB of the preset). */
 function firstSyncSentence() {
   if (restore.active()) {
-    return 'Your folders come down from PikPak over the first syncs (about ' + fmtSize(restore.restoreBytes())
-      + '). After that, it runs every hour while your PC is on.';
+    return 'Your folders come down from PikPak over the first syncs. After that, it runs every hour while your PC is on.';
   }
   const t = chosenTotal();
   const preset = setup.account && setup.account.preset === 'premium' ? 'premium' : 'free';

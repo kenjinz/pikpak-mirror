@@ -1,7 +1,10 @@
 // Setup with a restore: after sign-in, setup.discover looks in PikPak for the folder list backup and for
 // encrypted folders. Then: Recovery key of the earlier install (s-oldkey, only when PikPak holds encrypted
-// folders this PC can't open yet) -> Found your folders (s-found, from the backup or, without one, from the
-// folders' ID files) -> Done (setup.js runs setup.finish with args.restore). Nothing found: Choose folders.
+// folders this PC can't open yet) -> Done (setup.js runs setup.finish with args.restore).
+//   - A backup with at least one folder restores by itself: every folder in it is chosen, no list is shown.
+//     Until setup.finish starts, "Set up from scratch instead" leads to Choose folders.
+//   - No backup: Found your folders (s-found), built from the folders' ID files, with ticks and Restore.
+//   - Nothing found: Choose folders.
 //
 // The typed recovery key (or password and salt) is read from its fields when Check key is pressed, sent once
 // in setup.usekey's `recoveryKey` / `salt` args and never kept: the fields are emptied after a check that
@@ -11,6 +14,7 @@ import { callFull, pickFolder } from './bridge.js';
 import { ELLIPSIS, GIB, $, h, asList, say, messageOf, fmtSize, fmtDay } from './util.js';
 
 const SKIP_NOTE = 'Your encrypted folders stay locked in PikPak. You can enter the key later in Settings.';
+const RESTORING_TEXT = 'Restoring your folders from PikPak' + ELLIPSIS;
 const NO_BACKUP = 'No backup of your settings was found. Your folders were found from PikPak; settings are back to defaults.';
 const HOLDS_NOTE = 'Contains encrypted folders. It resumes once you enter your recovery key.';
 const FRESH_TEXT = "Your old folder list in PikPak will be replaced the first time you save. The folders' ID files stay in PikPak.";
@@ -34,7 +38,10 @@ const rs = {
   keySkipped: false,  // the owner pressed "I don't have my key"
   fromScan: false,    // the rows came from setup.scan (no usable backup)
   rows: [],
-  active: false,      // the owner pressed Restore: setup.finish restores instead of using Choose folders
+  active: false,      // setup.finish restores instead of using Choose folders (a backup was found, or Restore was pressed)
+  asking: false,      // the Start fresh / Set up from scratch confirmation is open
+  held: false,        // an answer came in while it was open: afterKey runs when it is cancelled
+  auto: false,        // a backup restores by itself: sizes were not fetched, so the list (if Back shows it) has none
   checking: false,    // setup.usekey with a typed key is running
   previewLines: []    // what discover / scan / usekey would have done (preview mode)
 };
@@ -61,7 +68,7 @@ export function afterSignin(account) {
   rs.seq++;
   Object.assign(rs, {
     phase: 'discover', error: null, retry: null, canSkip: false, discover: null, encrypted: null,
-    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, previewLines: []
+    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, held: false, auto: false, previewLines: []
   });
   oldBox.pairMode = false;
   oldBox.clear();
@@ -123,17 +130,35 @@ async function useExistingKey() {
   afterKey();
 }
 
-/** The key step is over (checked, skipped, or not needed): the backup's list, else the ID files. */
+/**
+ * The key step is over (checked, skipped, or not needed): a backup restores by itself, else the ID files are listed.
+ * Nothing happens once the owner left the restore (phase 'off': Set up from scratch, Back), and an answer that came in
+ * while the Set up from scratch question is open waits for its outcome.
+ */
 function afterKey() {
+  if (rs.phase === 'off') return;
+  if (rs.asking) { rs.held = true; return; }
   const b = rs.discover && rs.discover.backup;
   if (b) {
     rs.fromScan = false;
-    buildRows(asList(b.Pairs && asList(b.Pairs).length ? b.Pairs : (b.Config && b.Config.Pairs)));
+    buildRows(asList(b.Pairs && asList(b.Pairs).length ? b.Pairs : (b.Config && b.Config.Pairs)), true);
     if (!rs.rows.length) { toFolders(); return; }
-    showList();
+    // Folders without any place (the backup has no path for them) can't be restored by themselves: the list lets the
+    // owner choose places.
+    if (!ticked().length) { showList(); return; }
+    restoreAuto();
     return;
   }
   runScan();
+}
+
+/** Every folder of the backup is chosen: straight to Done, where setup.finish restores them. */
+function restoreAuto() {
+  rs.phase = 'list';   // Back from a Done screen that failed lands on the list of what was chosen
+  rs.canSkip = false;
+  rs.auto = true;
+  rs.active = true;
+  hooks.go('done');
 }
 
 async function runScan() {
@@ -160,6 +185,7 @@ async function runScan() {
 function showList() {
   rs.phase = 'list';
   rs.canSkip = false;
+  rs.auto = false;
   go('found');
   renderFound();
   loadSizes();
@@ -168,6 +194,7 @@ function showList() {
 /** Today's Choose folders screen (nothing found, Skip, or Start fresh instead). */
 function toFolders() {
   rs.seq++;
+  rs.held = false;
   rs.active = false;
   rs.phase = 'off';
   hooks.go('folders');
@@ -203,7 +230,8 @@ export function encRow(f) {
   };
 }
 
-function buildRows(pairs) {
+/** `all`: a backup restores everything, so a folder whose drive is missing is chosen too (at its old place). */
+function buildRows(pairs, all) {
   const rows = [];
   for (const p of pairs) {
     if (!p || !p.Name) continue;
@@ -226,14 +254,17 @@ function buildRows(pairs) {
     const r = encRow(f);
     if (r) rows.push(r);
   }
-  tickDefaults(rows);
+  tickDefaults(rows, all);
   rs.rows = rows;
 }
 
-/** Ticked when its place is on this PC; a second folder with the same name stays unticked. A locked row never is. */
-export function tickDefaults(rows) {
+/**
+ * Ticked when its place is on this PC (with `all`, also when its drive is missing); a second folder with the same name
+ * stays unticked. A locked row never is.
+ */
+export function tickDefaults(rows, all) {
   for (const r of rows) {
-    r.on = r.locked !== true && !r.driveMissing && !!r.path && !rows.some(o => o !== r && o.on && sameName(o.name, r.name));
+    r.on = r.locked !== true && (all || !r.driveMissing) && !!r.path && !rows.some(o => o !== r && o.on && sameName(o.name, r.name));
   }
 }
 
@@ -312,7 +343,7 @@ export function stepTotal() {
 
 function totalLine() {
   const on = ticked();
-  if (!on.length) return '';
+  if (!on.length || rs.auto) return '';
   if (on.some(r => r.bytes === undefined)) return 'Checking how much will come down from PikPak' + ELLIPSIS;
   const bytes = on.reduce((s, r) => s + (r.bytes || 0), 0);
   let text = 'About ' + fmtSize(bytes) + ' will come down from PikPak.';
@@ -363,7 +394,8 @@ export function foundRow(r, i, on) {
 
 const setupRowActions = {
   tick: (r, on) => { setTicked(r, on); renderFound(); },
-  choose: r => choosePlace(r)
+  choose: r => choosePlace(r),
+  get sizes() { return !rs.auto; }
 };
 const rowView = (r, i) => foundRow(r, i, setupRowActions);
 
@@ -397,15 +429,17 @@ function renderFound() {
   $('#foundLead').textContent = lead;
 
   if (loading) {
-    const text = rs.phase === 'scan' ? 'Looking for your folders in PikPak' + ELLIPSIS : 'Checking your PikPak' + ELLIPSIS;
+    const scan = rs.phase === 'scan';
+    const text = scan ? 'Looking for your folders in PikPak' + ELLIPSIS : RESTORING_TEXT;
     list.replaceChildren(h('div', { class: 'lrow empty' },
       h('span', { text: text + ' ' }),
-      rs.canSkip ? h('button', { class: 'btn btn-quiet', text: 'Skip', onclick: toFolders }) : null));
+      rs.canSkip ? h('button', { class: 'btn btn-quiet', text: 'Skip', onclick: toFolders }) : null,
+      scan ? null : scratchLink()));
   } else if (rs.phase === 'error') {
     list.replaceChildren(h('div', { class: 'lrow empty' },
       h('span', { text: messageOf(rs.error, "PikPak couldn't be checked. Try again.") + ' ' }),
       h('button', { class: 'btn btn-quiet', text: 'Try again', onclick: () => rs.retry && rs.retry() }),
-      rs.canSkip ? h('button', { class: 'btn btn-quiet', text: 'Skip', onclick: toFolders }) : null));
+      rs.canSkip ? h('button', { class: 'btn btn-quiet', text: 'Skip', onclick: toFolders }) : scratchLink()));
   } else if (isList) {
     const focused = document.activeElement && list.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
     list.replaceChildren(...rs.rows.map(rowView));
@@ -422,13 +456,31 @@ function renderFound() {
   $('#foundRestore').disabled = !isList || ticked().length === 0;
 }
 
+/** The quiet link of the restoring screen (before setup.finish starts): Choose folders instead, after the question. */
+function scratchLink() {
+  return h('button', { class: 'btn btn-quiet', text: 'Set up from scratch instead', onclick: startFresh });
+}
+
+/**
+ * Start fresh (the list's button and the restoring screen's link): after the question, Choose folders. Pressing it
+ * ends the restore for good (toFolders drops every answer still on its way); an answer that arrives while the
+ * question is open waits, and carries on only when the question is cancelled.
+ */
 async function startFresh() {
-  const ok = await hooks.confirmBox({
-    title: 'Start fresh instead?',
-    body: [h('p', { text: FRESH_TEXT })],
-    ok: 'Start fresh'
-  });
-  if (ok) toFolders();
+  if (rs.asking) return;
+  rs.asking = true;
+  let ok = false;
+  try {
+    ok = await hooks.confirmBox({
+      title: 'Start fresh instead?',
+      body: [h('p', { text: FRESH_TEXT })],
+      ok: 'Start fresh'
+    });
+  } finally {
+    rs.asking = false;
+  }
+  if (ok) { toFolders(); return; }
+  if (rs.held) { rs.held = false; afterKey(); }
 }
 
 function restoreNow() {
@@ -542,14 +594,14 @@ function skipKey() {
 
 // ===== what setup.js needs ==========================================================================
 
-/** True when the owner pressed Restore (setup.finish then sends restoreArg()). */
+/** True when this setup restores (a backup was found, or Restore was pressed): setup.finish then sends restoreArg(). */
 export function active() {
   return rs.active;
 }
 
 /**
  * setup.finish's args.restore: the backup's settings, the ticked folders as they came with their place on
- * this PC, the backup's filter rules and whether the key was skipped. No UI keys go along.
+ * this PC, the backup's filter rules, when the backup was saved and whether the key was skipped. No UI keys go along.
  */
 export function restoreArg() {
   const b = rs.discover && rs.discover.backup;
@@ -571,12 +623,8 @@ export function restoreArg() {
   }
   const arg = { pairs, privatePaths, globalFilters: (b && !rs.fromScan && typeof b.GlobalFilters === 'string') ? b.GlobalFilters : '', keySkipped: rs.keySkipped };
   if (b && !rs.fromScan && b.Config) arg.settings = b.Config;
+  if (b && !rs.fromScan) arg.saved = String(b.Saved || '');
   return arg;
-}
-
-/** The total of the ticked folders in bytes (unknown sizes count as 0). */
-export function restoreBytes() {
-  return ticked().reduce((s, r) => s + (r.bytes || 0), 0);
 }
 
 /** What discover / scan / usekey would have done, for the preview list on the Done screen. */
