@@ -65,15 +65,14 @@ come back. There is no list to confirm.
    either side and deletes nothing. Downloads count against the PikPak limits
    ([user guide](README.md#limits-and-notifications)); a big folder takes several days and continues by itself.
    A holding or state folder on a drive this PC doesn't have goes back to its default place.
+   If a folder can't be restored by itself (the backup has no place for it on this PC, or another folder has the
+   same name), the app first shows the list *Found your folders in PikPak* with a tick for each folder: choose a
+   place for it or untick the other one, then press **Restore**. Nothing is left out without your choice.
 4. The last setup screen says "Restored N folders from your backup of <date>." with a line for each of these,
    when it applies:
    - **Waiting for a drive**: the folder's drive is not connected on this PC. The folder is restored at its old
-     path and waits on Home ("Drive not connected"). Connect the drive and it carries on, or click **Locate...**
-     to pick another place on this PC. Only the place on this PC changes; the folder keeps its PikPak place and
-     its ID.
+     path and waits on Home ("Drive not connected"). Connect the drive and it carries on.
    - **Paused until you enter your recovery key**: see below.
-   - **Not restored**: the folder has no place on this PC, or another folder has the same name. Add it again
-     with **Add a folder** on Home.
    - Problems, if any step failed.
 
    A path written as `C:\Users\<old>\...` moves to the new profile by itself when that old profile folder doesn't

@@ -2272,6 +2272,9 @@ function Invoke-GuiActionSetupFinish {
         $Ctx.Args['recoveryKey'] = $null
         try { $state.Config = Get-MirrorConfig -Path $cfgFull }
         catch { throw (New-GuiException 'config-invalid' ("Your settings file couldn't be read: {0}" -f $_.Exception.Message)) }
+        # Retry resends args.restore: only the date of the backup is read from it (the folders are already in the config).
+        $again = Get-GuiArg $Ctx 'restore' $null
+        if ($again -is [hashtable] -and $null -ne $again['saved']) { $savedText = [string]$again['saved'] }
         & $restoredStep
         & $installSteps
         $out = @{ steps = $steps.ToArray(); complete = (-not $state.Failed) }

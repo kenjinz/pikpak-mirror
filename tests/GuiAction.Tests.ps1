@@ -3601,6 +3601,17 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             [IO.File]::ReadAllText((Join-Path $c.Docs 'keep.txt')) | Should -Be 'mine'
         }
 
+        It 'resume reports the date of the backup that Retry sends again' {
+            $c = New-RestoreCase -KeySkipped
+            $first = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $first.data.complete | Should -BeTrue
+            $r = Invoke-Req (New-Req 'setup.finish' @{ resume = $true; restore = @{ saved = '2026-11-20T10:00:00Z' } }) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.restored.saved | Should -Be '2026-11-20T10:00:00Z'
+            $none = Invoke-Req (New-Req 'setup.finish' @{ resume = $true }) $c.ConfigPath
+            $none.data.restored.saved | Should -Be ''
+        }
+
         It 'restored folders count only real entries and refuse a path without a drive' {
             $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
             $one = New-GuiRestoredSummary -Config @{ Pairs = @(@{ Name = 'A'; Local = (Join-Path $root 'A') }) } -Result @{ DriveMissing = @(); Problems = @() }

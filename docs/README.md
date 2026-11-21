@@ -374,9 +374,9 @@ limit per day (GB)**, **Transfer limit per month (GB)**, `BwLimit`, ...).
 ## Moving a folder (Locate)
 
 Each synced and encrypted folder has a small ID file at its top, `.pikpak-sync.json` (see below). If you move or
-rename a folder in Explorer, the app can't find it any more. Home shows **Folder not found** (or **Drive not connected**
-when its drive is simply unplugged: then it just waits) and a **Locate...** button. Press it and pick the folder
-at its new place:
+rename a folder in Explorer, the app can't find it any more. Home shows **Folder not found** and a **Locate...**
+button. (When its drive is simply unplugged, Home shows **Drive not connected**: the folder just waits, with no
+button, and carries on once the drive is back.) Press **Locate...** and pick the folder at its new place:
 
 - If the folder has the same ID, a box says "This is '<Name>' (was at <old path>). Use it from now on?". Confirm
   and the app uses the new path.

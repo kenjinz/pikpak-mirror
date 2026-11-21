@@ -1,8 +1,11 @@
 // Setup with a restore: after sign-in, setup.discover looks in PikPak for the folder list backup and for
 // encrypted folders. Then: Recovery key of the earlier install (s-oldkey, only when PikPak holds encrypted
 // folders this PC can't open yet) -> Done (setup.js runs setup.finish with args.restore).
-//   - A backup with at least one folder restores by itself: every folder in it is chosen, no list is shown.
-//     Until setup.finish starts, "Set up from scratch instead" leads to Choose folders.
+//   - A backup whose folders can all be restored (each has a place on this PC, no name used twice) restores by
+//     itself: no list is shown. Encrypted folders left out only because the key was skipped don't count. Until
+//     setup.finish starts, "Set up from scratch instead" leads to Choose folders.
+//   - A backup where a folder can't be placed (no place on this PC, or a name used twice): the list below, so the
+//     owner chooses; a folder left out would otherwise drop out of the backup at the first push.
 //   - No backup: Found your folders (s-found), built from the folders' ID files, with ticks and Restore.
 //   - Nothing found: Choose folders.
 //
@@ -44,7 +47,6 @@ const rs = {
   asking: false,      // the Start fresh / Set up from scratch confirmation is open
   held: false,        // an answer came in while it was open: afterKey runs when it is cancelled
   auto: false,        // a backup restores by itself: sizes were not fetched, so the list (if Back shows it) has none
-  leftOut: [],        // names of backup folders the automatic restore leaves out (no place, or a name used twice)
   checking: false,    // setup.usekey with a typed key is running
   previewLines: []    // what discover / scan / usekey would have done (preview mode)
 };
@@ -71,7 +73,7 @@ export function afterSignin(account) {
   rs.seq++;
   Object.assign(rs, {
     phase: 'discover', error: null, retry: null, canSkip: false, discover: null, encrypted: null,
-    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, asking: false, held: false, auto: false, leftOut: [], previewLines: []
+    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, asking: false, held: false, auto: false, previewLines: []
   });
   oldBox.pairMode = false;
   oldBox.clear();
@@ -146,9 +148,10 @@ function afterKey() {
     rs.fromScan = false;
     buildRows(backupPairs(b), true);
     if (!rs.rows.length) { toFolders(); return; }
-    // Folders without any place (the backup has no path for them) can't be restored by themselves: the list lets the
-    // owner choose places.
-    if (!ticked().length) { showList(); return; }
+    // A folder that can't be restored by itself (no place on this PC, or a name used twice) would be left out of the
+    // backup at the first push: the list lets the owner choose places. (An encrypted folder missing only because the
+    // key was skipped has no row, so the skipped-key path stays automatic.)
+    if (rs.rows.some(r => !r.on)) { showList(); return; }
     restoreAuto();
     return;
   }
@@ -166,9 +169,8 @@ function restoreKnown() {
   return !!b && backupPairs(b).some(p => p && p.Name);
 }
 
-/** Every folder of the backup is chosen: straight to Done, where setup.finish restores them. */
+/** Every folder of the backup can be restored: straight to Done, where setup.finish restores them. */
 function restoreAuto() {
-  rs.leftOut = rs.rows.filter(r => !r.on).map(r => r.name);   // named on the Done screen, never dropped silently
   rs.phase = 'list';   // Back from a Done screen that failed lands on the list of what was chosen
   rs.canSkip = false;
   rs.auto = true;
@@ -201,7 +203,7 @@ function showList() {
   rs.phase = 'list';
   rs.canSkip = false;
   rs.auto = false;
-  rs.leftOut = [];
+  rs.active = false;   // until Restore is pressed (restoreNow)
   go('found');
   renderFound();
   loadSizes();
@@ -211,7 +213,6 @@ function showList() {
 function toFolders() {
   rs.seq++;
   rs.held = false;
-  rs.leftOut = [];
   rs.active = false;
   rs.phase = 'off';
   hooks.go('folders');
@@ -503,7 +504,6 @@ async function startFresh() {
 
 function restoreNow() {
   if (rs.phase !== 'list' || !ticked().length) return;
-  rs.leftOut = [];   // the ticks are the owner's choice now
   rs.active = true;
   hooks.go('done');
 }
@@ -644,11 +644,6 @@ export function restoreArg() {
   if (b && !rs.fromScan && b.Config) arg.settings = b.Config;
   if (b && !rs.fromScan) arg.saved = String(b.Saved || '');
   return arg;
-}
-
-/** Names of the backup's folders the automatic restore left out (no place, or a name used twice); empty otherwise. */
-export function leftOut() {
-  return rs.active ? rs.leftOut.slice() : [];
 }
 
 /** What discover / scan / usekey would have done, for the preview list on the Done screen. */

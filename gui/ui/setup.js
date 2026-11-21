@@ -589,8 +589,6 @@ function renderRestored(restored) {
   const paused = asList(restored.pausedForKey).map(String);
   if (drives.length) lines.push('Waiting for a drive: ' + drives.join(', ') + '.');
   if (paused.length) lines.push('Paused until you enter your recovery key: ' + paused.join(', ') + '.');
-  const left = restore.leftOut();
-  if (left.length) lines.push('Not restored (no place on this PC, or another folder has the same name): ' + left.join(', ') + '.');
   for (const p of asList(restored.problems)) lines.push(String((p && p.name) || '') + ': ' + String((p && p.reason) || ''));
   box.replaceChildren(...lines.map(t => h('p', { class: 'lead', style: 'margin-bottom:.5rem', text: t })));
   box.hidden = false;
