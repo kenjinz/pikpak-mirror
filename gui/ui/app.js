@@ -222,6 +222,7 @@ function renderHome() {
   renderStatusBlock();
   renderFolders();
   renderSpace();
+  renderDay();
   renderMonth();
 }
 
@@ -602,6 +603,20 @@ function renderSpace() {
   const pct = sp.used / sp.total * 100;
   setBar('spaceBar', 'spaceFill', pct, pct >= 90);
   $('#spaceText').textContent = fmtSize(sp.used) + ' of ' + fmtSize(sp.total) + ' used';
+}
+
+function renderDay() {
+  const d = home.status && home.status.Day;
+  if (!d) {
+    setBar('dayBar', 'dayFill', 0, false);
+    $('#dayText').textContent = home.error ? "Couldn't check right now." : 'Checking' + ELLIPSIS;
+    return;
+  }
+  const used = Number(d.UsedGB) || 0;
+  const budget = Number(d.BudgetGB) || 0;
+  const pct = budget ? used / budget * 100 : 0;
+  setBar('dayBar', 'dayFill', pct, budget && pct >= 100);
+  $('#dayText').textContent = fmtSize(used * GIB) + (budget ? ' of ' + fmtSize(budget * GIB) : '');
 }
 
 function renderMonth() {

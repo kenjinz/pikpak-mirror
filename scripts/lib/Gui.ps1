@@ -144,8 +144,13 @@ function Get-GuiStatus {
         LastSuccess = $State.LastSuccess
         NextRun   = $nextRun
         Month     = @{ UsedGB = $mstat.UsedGB; BudgetGB = $mstat.BudgetGB }
+        Day       = @{ UsedGB = $mstat.DayUsedGB; BudgetGB = $mstat.DayBudgetGB }
         Space     = @{ UsedBytes = $null; TotalBytes = $null }
     }
+    # The daily limit is this app's own setting (Settings, Advanced), kept under PikPak's. Name it, so a pause
+    # is not read as PikPak refusing: "1 GB a day". $null when the config has no readable number.
+    $dayLimit = $null
+    if ($null -ne $mstat.DayBudgetGB) { $dayLimit = '{0} GB a day' -f ([double]$mstat.DayBudgetGB).ToString('0.#', $inv) }
     if ($about.ContainsKey('UsedBytes')) { $res.Space.UsedBytes = $about['UsedBytes'] }
     if ($about.ContainsKey('TotalBytes')) { $res.Space.TotalBytes = $about['TotalBytes'] }
     $set = {
@@ -244,13 +249,21 @@ function Get-GuiStatus {
         return (& $set 'waiting' 'ok' 'Waiting for the next sync' ('Last sync: {0}. Full details appear after the next sync.' -f $w))
     }
     if ($dayPausedNow) {
-        return (& $set 'day-paused' 'ok' "Today's transfer limit is reached" 'Syncing carries on tomorrow. Nothing is lost.')
+        $detail = 'Syncing carries on tomorrow. Nothing is lost.'
+        if ($null -ne $dayLimit) { $detail = 'Your limit is {0} (you can change it in Settings, under Advanced). {1}' -f $dayLimit, $detail }
+        return (& $set 'day-paused' 'ok' "Today's transfer limit is reached" $detail)
     }
     if ($anyUnseeded) {
         return (& $set 'first' 'ok' 'Your first sync is on its way' 'Big folders can take a few days. It carries on by itself.')
     }
     if ($result -eq 'budget-stopped') {
-        return (& $set 'partial' 'ok' 'Part of your sync is done' "PikPak's transfer limit for today was reached. The rest carries on tomorrow.")
+        $detail = "Today's transfer limit was reached. The rest carries on tomorrow."
+        if ($null -ne $dayLimit) { $detail = 'Your limit of {0} was reached. The rest carries on tomorrow. You can change the limit in Settings, under Advanced.' -f $dayLimit }
+        # The run was cut off by the monthly limit (State.MonthStopped), not the daily one.
+        if ([string]$State.MonthStopped -eq (Get-MonthKey -Now $Now) -and $null -ne $mstat.BudgetGB) {
+            $detail = 'Your limit of {0} GB a month was reached. The rest carries on next month. You can change the limit in Settings, under Advanced.' -f ([double]$mstat.BudgetGB).ToString('0.#', $inv)
+        }
+        return (& $set 'partial' 'ok' 'Part of your sync is done' $detail)
     }
     if (Test-StaleSuccess -State $State -Config $Config -Now $Now) {
         $last = ConvertTo-GuiDate $State.LastSuccess

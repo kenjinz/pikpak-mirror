@@ -161,14 +161,46 @@ Describe 'Get-GuiStatus' {
         $info = @{ Result = 'budget-stopped'; Issues = @() }
         $r = Get-GuiStatus -Config $cfg -State (New-GuiState $null $info) -Now $Now -Facts $facts
         $r.Situation | Should -Be 'partial'; $r.Tone | Should -Be 'ok'; $r.Title | Should -Be 'Part of your sync is done'
-        $r.Detail | Should -Be "PikPak's transfer limit for today was reached. The rest carries on tomorrow."
+        $r.Detail | Should -Be "Your limit of 1 GB a day was reached. The rest carries on tomorrow. You can change the limit in Settings, under Advanced."
+        $r.Detail | Should -Not -Match 'PikPak'
+    }
+    It 'budget-stopped names the daily limit from the settings' {
+        $cfg.DailyBudgetGB = 5
+        $info = @{ Result = 'budget-stopped'; Issues = @() }
+        (Get-GuiStatus -Config $cfg -State (New-GuiState $null $info) -Now $Now -Facts $facts).Detail | Should -Match 'limit of 5 GB a day'
+    }
+    It 'budget-stopped by the monthly limit names the monthly limit, not the daily one' {
+        $st = New-GuiState $null @{ Result = 'budget-stopped'; Issues = @() }
+        $st.MonthStopped = (Get-MonthKey -Now $Now)
+        $d = (Get-GuiStatus -Config $cfg -State $st -Now $Now -Facts $facts).Detail
+        $d | Should -Match 'limit of 30 GB a month'
+        $d | Should -Not -Match 'a day'
+    }
+    It 'Day carries what was transferred today and the daily limit' {
+        $st = New-GuiState (Get-Ago 1)
+        $st.Day = (Get-DayKey -Now $Now)
+        $st.DayBytes = [long](0.5GB)
+        $r = Get-GuiStatus -Config $cfg -State $st -Now $Now -Facts $facts
+        $r.Day.UsedGB | Should -Be 0.5; $r.Day.BudgetGB | Should -Be 1
+    }
+    It 'Day counts nothing when the stored day is an earlier one' {
+        $st = New-GuiState (Get-Ago 1)
+        $st.Day = (Get-DayKey -Now $Now.AddDays(-1))
+        $st.DayBytes = [long](0.9GB)
+        (Get-GuiStatus -Config $cfg -State $st -Now $Now -Facts $facts).Day.UsedGB | Should -Be 0
     }
     It 'shows day-paused as a calm message, not as a failure' {
         $info = @{ Started = (Get-Ago 2); Finished = (Get-Ago 1); Result = 'day-paused'; Issues = @() }
         $r = Get-GuiStatus -Config $cfg -State (New-GuiState (Get-Ago 30) $info) -Now $Now -Facts $facts
         $r.Situation | Should -Be 'day-paused'; $r.Tone | Should -Be 'ok'
         $r.Title | Should -Be "Today's transfer limit is reached"
-        $r.Detail | Should -Be 'Syncing carries on tomorrow. Nothing is lost.'
+        $r.Detail | Should -Be 'Your limit is 1 GB a day (you can change it in Settings, under Advanced). Syncing carries on tomorrow. Nothing is lost.'
+        $r.Detail | Should -Not -Match 'PikPak'
+    }
+    It 'day-paused names the daily limit from the settings, not a fixed number' {
+        $cfg.DailyBudgetGB = 5
+        $info = @{ Started = (Get-Ago 2); Finished = (Get-Ago 1); Result = 'day-paused'; Issues = @() }
+        (Get-GuiStatus -Config $cfg -State (New-GuiState (Get-Ago 30) $info) -Now $Now -Facts $facts).Detail | Should -Match 'Your limit is 5 GB a day'
     }
     It 'F2: a paused run keeps the last real run''s problem as the headline, row and issue kind' {
         $iss = @(@{ Pair = 'Alpha'; Kind = 'delete-safety'; Message = 'Alpha: too many deletes'; Log = $null; Private = $false })
