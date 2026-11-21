@@ -472,6 +472,24 @@ Describe 'Publish-ConfigBackup' {
         (Get-BackupStatus -StateDir $s.StateDir).FailingSince | Should -Be $script:Now.ToString('yyyy-MM-dd"T"HH:mm:ss')
     }
 
+    It 'uploads again and clears FailingSince when the config returns to the last uploaded content after a failure' {
+        $s = New-PublishSetup
+        $null = Publish-Test $s
+        Set-PublishConfig $s @{ DailyBudgetGB = 5 }
+        $script:RcloneExit = 1
+        $null = Publish-Test $s -At $script:Now.AddHours(1)
+        (Get-BackupStatus -StateDir $s.StateDir).FailingSince | Should -Not -BeNullOrEmpty
+        # Back to the content of the last good upload: PikPak may hold a partial upload, so it is sent again.
+        Set-PublishConfig $s @{ DailyBudgetGB = 1 }
+        $script:RcloneExit = 0
+        $script:Uploads.Clear()
+        $r = Publish-Test $s -At $script:Now.AddHours(2)
+        $r.Skipped | Should -BeFalse
+        $r.Uploaded | Should -BeTrue
+        $script:Uploads.Count | Should -Be 1
+        (Get-BackupStatus -StateDir $s.StateDir).FailingSince | Should -BeNullOrEmpty
+    }
+
     It 'does not throw when the config file cannot be read' {
         $s = New-PublishSetup
         $loaded = Get-MirrorConfig -Path $s.Path

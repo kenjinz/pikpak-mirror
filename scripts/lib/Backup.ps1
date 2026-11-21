@@ -395,7 +395,9 @@ function Publish-ConfigBackup {
         $docs = ConvertTo-BackupDocuments -RawConfig $raw -GlobalFilters $filters -Now $Now -PcName ([string]$env:COMPUTERNAME) -AppVersion (Get-BackupAppVersion)
 
         $status = Get-BackupStatus -StateDir $stateDir
-        if (-not $Force -and $status.Hash -ceq $docs.Hash) {
+        # Skipped only when nothing changed AND the last try did not fail: after a failure (maybe a partial upload)
+        # the same content is sent again, which also clears FailingSince once it works.
+        if (-not $Force -and $status.Hash -ceq $docs.Hash -and [string]::IsNullOrEmpty([string]$status.FailingSince)) {
             $result.Skipped = $true
             return $result
         }

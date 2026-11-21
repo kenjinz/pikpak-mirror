@@ -93,9 +93,13 @@ fn clip(text: &str) -> String {
 pub fn action_timeout(action: &str, args: &Value) -> Duration {
     match action {
         "setup.signin" | "setup.finish" => Duration::from_secs(30 * 60),
-        "private.remoteList" | "private.deleteRemote" | "folders.locate" | "setup.scan" | "setup.sizes" => {
-            Duration::from_secs(300)
-        }
+        "private.remoteList"
+        | "private.deleteRemote"
+        | "folders.locate"
+        | "setup.scan"
+        | "setup.sizes"
+        | "setup.usekey"
+        | "private.usekey" => Duration::from_secs(300),
         "folders.size" => {
             let max = args["maxSeconds"]
                 .as_f64()
@@ -468,6 +472,8 @@ mod tests {
         assert_eq!(action_timeout("folders.locate", &none), Duration::from_secs(300));
         assert_eq!(action_timeout("setup.scan", &none), Duration::from_secs(300));
         assert_eq!(action_timeout("setup.sizes", &none), Duration::from_secs(300));
+        assert_eq!(action_timeout("setup.usekey", &none), Duration::from_secs(300));
+        assert_eq!(action_timeout("private.usekey", &none), Duration::from_secs(300));
         assert_eq!(action_timeout("setup.discover", &none), Duration::from_secs(120));
     }
 

@@ -2331,7 +2331,11 @@ function Invoke-GuiActionSetupFinish {
         if ($null -ne $restore -and @($restore.privatePaths).Count -gt 0) {
             & $run 'Recovery key' { Confirm-GuiRestoreKey -WhatIf:$isPreview }
         }
-        # 4. Only now the config file.
+        # 4. The backup's filter rules: a local file only, written BEFORE the config so a failure here leaves
+        #    no config (a Retry would take the resume path, skip this step and let the next sync upload a
+        #    backup without the owner's rules). $state.Config already names GlobalFiltersFile from the check.
+        if ($null -ne $restore) { & $run 'Filters' { Save-GuiRestoreFilters -Config $state.Config -Text $restore.globalFilters -WhatIf:$isPreview } }
+        # 5. Only now the config file.
         & $run 'Settings' {
             if ($isPreview) { return ('Would write {0}' -f $cfgFull) }
             $dir = Split-Path -Path $cfgFull -Parent
@@ -2341,7 +2345,6 @@ function Invoke-GuiActionSetupFinish {
             $state.Config = Get-MirrorConfig -Path $cfgFull
             ('Settings saved to {0}' -f $cfgFull)
         }
-        if ($null -ne $restore) { & $run 'Filters' { Save-GuiRestoreFilters -Config $state.Config -Text $restore.globalFilters -WhatIf:$isPreview } }
         & $installSteps
         if ($null -ne $restore) {
             & $run 'Folder list backup' { Invoke-GuiRestoreBackupPush -ConfigPath $cfgFull -Config $state.Config -Now $Ctx.Now -WhatIf:$isPreview }

@@ -128,7 +128,9 @@ function Get-GuiExistingKeyState {
     if ($x.ExitCode -ne 0) { return 'unchecked' }
     if (@(@($x.Output) | ForEach-Object { ([string]$_).TrimEnd('/') } | Where-Object { Test-EncryptedFolderName $_ }).Count -gt 0) { return 'opens' }
     # No folder of its own (only files or the holding area): anything the key decrypts shows it is the right key.
-    if ((Get-RemoteEntryCount -Target ($names.Private + ':')) -gt 0) { return 'opens' }
+    $dec = Get-RemoteEntryCount -Target ($names.Private + ':')
+    if ($dec -gt 0) { return 'opens' }
+    if ($dec -lt 0) { return 'unchecked' }
     'wrong'
 }
 
@@ -140,8 +142,8 @@ function Test-GuiExistingKeyOpens {
 
 function Invoke-GuiUseKey {
     # Shared by setup.usekey and private.usekey. -Setup: an existing 'private' remote that opens the data is used
-    # as it is. Otherwise an existing remote is a refusal. A 'private' remote is never deleted here: it may hold
-    # the owner's only working key.
+    # as it is. Otherwise an existing remote is a refusal. A 'private' remote that was there before is never deleted
+    # here (it may hold the owner's only working key); only the one this call just made, when it couldn't be checked.
     param([Parameter(Mandatory)][hashtable]$Ctx, [switch]$Setup)
     # In setup, no key typed at all asks to use this PC's existing 'private' remote (setup.discover said hasKey):
     # it is used only when it opens the data, else the owner is asked to type the key.
@@ -186,8 +188,23 @@ function Invoke-GuiUseKey {
         }
         # Never reached without a key ($noKey is setup only and every setup state above returned or threw).
         if ($noKey) { throw (New-GuiException 'bad-request' $typeKey) }
-        try { $null = New-MirrorPrivateRemote -Name $names.Private -BaseRemote $names.Base -Password $k.Password -Salt $k.Salt -Mode Existing }
-        catch { throw (New-GuiException 'bad-key' "That key doesn't open your encrypted folders. Check it and try again.") }
+        $made = $null
+        try { $made = New-MirrorPrivateRemote -Name $names.Private -BaseRemote $names.Base -Password $k.Password -Salt $k.Salt -Mode Existing }
+        catch {
+            # Only the "nothing decrypts" refusal means a wrong key (New-MirrorPrivateRemote already removed the
+            # remote); anything else is a failure to create or check it, logged without the key.
+            $msg = [string]$_.Exception.Message
+            if ($msg -match 'none of it decrypts') { throw (New-GuiException 'bad-key' "That key doesn't open your encrypted folders. Check it and try again.") }
+            Write-GuiLog $Ctx.Config (Remove-GuiSecretText ('Using the recovery key failed: ' + $msg) @($k.Password, $k.Salt))
+            throw (New-GuiException 'remote-failed' "PikPak couldn't be checked, so the key wasn't kept. Try again.")
+        }
+        if ($null -ne $made -and -not [string]::IsNullOrEmpty([string]$made.Warning)) {
+            # The key was not checked against the data (a listing failed): a possibly wrong key is never kept. This
+            # call only creates the remote when there was none ('none' state), so it removes only what it made.
+            [void](Invoke-RcloneCaptured -RcloneArgs @('config', 'delete', $names.Private))
+            Write-GuiLog $Ctx.Config ("Using the recovery key: PikPak couldn't be checked; remote '{0}' was removed again." -f $names.Private)
+            throw (New-GuiException 'remote-failed' "PikPak couldn't be checked, so the key wasn't kept. Try again.")
+        }
     }
     finally { $k = $null }
     $res = Get-GuiEncryptedRestoreList -Ctx $Ctx

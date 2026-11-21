@@ -2712,6 +2712,60 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             ($r2 | ConvertTo-Json -Depth 8) | Should -Not -Match $salt
         }
 
+        It 'removes the remote it just made and says remote-failed when the key could not be checked' {
+            $script:Deleted = $null
+            Mock New-MirrorPrivateRemote { [pscustomobject]@{ Name = 'private'; Done = $true; Skipped = $false; Message = 'created'; Warning = "could not verify remote 'private' against existing data; check it with: rclone lsf private:"; Output = @() } }
+            Mock Invoke-RcloneCaptured { $script:Deleted = @($RcloneArgs); New-RcloneResult } -ParameterFilter { $RcloneArgs[0] -eq 'config' -and $RcloneArgs[1] -eq 'delete' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'remote-failed'
+            $r.error.message | Should -Be "PikPak couldn't be checked, so the key wasn't kept. Try again."
+            ($script:Deleted -join ' ') | Should -Be 'config delete private'
+            Should -Invoke Invoke-RcloneCaptured -Times 1 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' -and $RcloneArgs[1] -eq 'delete' -and $RcloneArgs[2] -eq 'private' }
+        }
+
+        It 'private.usekey removes the remote it just made when the key could not be checked' {
+            $s = New-TestSetup -Private
+            Mock New-MirrorPrivateRemote { [pscustomobject]@{ Name = 'private'; Done = $true; Skipped = $false; Message = 'created'; Warning = 'could not verify'; Output = @() } }
+            Mock Invoke-RcloneCaptured { New-RcloneResult } -ParameterFilter { $RcloneArgs[0] -eq 'config' -and $RcloneArgs[1] -eq 'delete' }
+            $r = Invoke-Req (New-Req 'private.usekey' @{ recoveryKey = (New-RecoveryKey) }) $s.Path
+            $r.error.code | Should -Be 'remote-failed'
+            Should -Invoke Invoke-RcloneCaptured -Times 1 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' -and $RcloneArgs[1] -eq 'delete' -and $RcloneArgs[2] -eq 'private' }
+        }
+
+        It 'maps a failure other than "nothing decrypts" to remote-failed and keeps the key out of the message and log' {
+            $key = New-RecoveryKey
+            $script:Logged = New-Object System.Collections.Generic.List[string]
+            Mock Write-GuiLog { $script:Logged.Add([string]$Message) }
+            Mock New-MirrorPrivateRemote { throw ("creating remote 'private' failed (exit 1); it was removed, try again. $($Password)") }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = $key }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'remote-failed'
+            ($r | ConvertTo-Json -Depth 8) | Should -Not -Match $key
+            $script:Logged.Count | Should -BeGreaterThan 0
+            ($script:Logged -join ' ') | Should -Match 'creating remote'
+            ($script:Logged -join ' ') | Should -Not -Match $key
+            $salt = 'SaltSaltSalt99'
+            $script:Logged.Clear()
+            $r2 = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = 'PlainPassword12'; salt = $salt }) $script:NoCfg
+            $r2.error.code | Should -Be 'remote-failed'
+            ($r2 | ConvertTo-Json -Depth 8) | Should -Not -Match 'PlainPassword12'
+            ($script:Logged -join ' ') | Should -Not -Match 'PlainPassword12'
+            ($script:Logged -join ' ') | Should -Not -Match $salt
+        }
+
+        It 'says try again, not "different key", when the existing remote cannot be listed after its folders' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $script:KeyDirs = @()
+            Mock Invoke-RcloneCaptured { New-RcloneResult -ExitCode 1 } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'private:' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'remote-failed'
+            $r.error.message | Should -Not -Match 'rclone config'
+            Get-GuiExistingKeyState -Ctx @{ Config = $null; Args = @{} } | Should -Be 'unchecked'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
         It 'setup.usekey refuses when PC-Private is empty' {
             $script:RawEntries = @()
             $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
@@ -3344,7 +3398,7 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
             $r.ok | Should -BeTrue
             $r.data.complete | Should -BeTrue
-            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Recovery key,Settings,Filters,Scheduled syncing,Local folders,Encrypted folders confirmed,Folder list backup'
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Recovery key,Filters,Settings,Scheduled syncing,Local folders,Encrypted folders confirmed,Folder list backup'
             @($r.data.steps)[2].message | Should -Be 'Recovery key from your earlier install is in use'
             $raw = Get-RawMirrorConfig -Path $c.ConfigPath
             $p = @($raw.Pairs)
@@ -3367,6 +3421,16 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -BeFalse
             [IO.File]::ReadAllText($filters) | Should -BeExactly "- *.tmp`n- Thumbs.db`n"
             Should -Invoke Publish-ConfigBackup -Times 1 -Exactly -ParameterFilter { $Force -and $ConfigPath -eq ([IO.Path]::GetFullPath($c.ConfigPath)) }
+        }
+
+        It 'finish with restore: a failing Filters step leaves no config written' {
+            $c = New-RestoreCase -KeySkipped
+            Mock Save-GuiRestoreFilters { throw 'filter file locked' }
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeFalse
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Filters'
+            Test-Path -LiteralPath $c.ConfigPath | Should -BeFalse
+            Should -Invoke Publish-ConfigBackup -Times 0 -Exactly
         }
 
         It 'finish with restore pauses pairs that hold encrypted folders when the key was skipped' {
