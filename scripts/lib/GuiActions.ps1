@@ -425,6 +425,7 @@ function Invoke-GuiRequest {
             'backup.push' { $fn = 'Invoke-GuiActionBackupPush' }
             'private.usekey' { $fn = 'Invoke-GuiActionPrivateUsekey' }
             'private.keyState' { $fn = 'Invoke-GuiActionPrivateKeyState' }
+            'private.restore' { $fn = 'Invoke-GuiActionPrivateRestore' }
             'setup.signin' { $fn = 'Invoke-GuiActionSetupSignin'; $needsConfig = $false }
             'setup.finish' { $fn = 'Invoke-GuiActionSetupFinish'; $needsConfig = $false }
             'setup.newkey' { $fn = 'Invoke-GuiActionSetupNewkey'; $needsConfig = $false }

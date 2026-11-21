@@ -8,6 +8,7 @@
 import { call, invoke, pickFolder, pickSaveFile, writeTextFile, copyText, autostartEnabled, setAutostart } from './bridge.js';
 import { ELLIPSIS, GIB, $, h, asList, say, messageOf, fmtSize, keyGroups, keySheetLines, keySheetText, fillKeySheet, clearKeySheet } from './util.js';
 import { pikpakTip, copyPikpakName } from './pikpak-name.js';
+import { keyBox, encRow, tickRow, tickDefaults, foundRow } from './restore.js';
 
 const KEY_FILE_NAME = 'PikPak recovery key.txt';
 const DEFAULT_BW = { from: '18:00', speed: '2M', to: '23:00' };   // BwLimit '18:00,2M:off 23:00,off'
@@ -21,8 +22,13 @@ const settings = {
   keyToken: 0,     // bumped whenever the key is hidden, so a late key.show answer is dropped
   secret: null,    // {kind:'single', key} | {kind:'pair', password, salt}; only while shown
   remote: null,    // last private.remoteList answer's folders (null = not loaded)
-  loadId: 0
+  loadId: 0,
+  noKey: false,    // private.keyState: PikPak holds encrypted folders and this PC has no key for them
+  keyPhase: 'off', // Enter recovery key: 'off' | 'row' (the row asks) | 'form' (the key box) | 'found' (the folders to restore)
+  keyBusy: false,  // private.usekey or private.restore is running
+  found: null      // {rows, waiting}: the encrypted folders the typed key opens
 };
+const useKeyBox = keyBox('setUseKey');
 
 const isPreview = () => !!(settings.hooks && settings.hooks.preview());
 
@@ -93,7 +99,7 @@ async function show() {
   for (const m of ['setLoadMsg', 'setMsg', 'setPrivMsg', 'setRemoteMsg', 'setKeyMsg', 'setAutoMsg', 'advMsg']) say(m, '');
   say('setLoadMsg', 'Loading' + ELLIPSIS, 'quiet');
   // Each part loads on its own, so one slow or failing call doesn't hold up the rest.
-  const parts = [loadSchedule(), loadConfig(), loadAutostart(), loadAccount()];
+  const parts = [loadSchedule(), loadConfig(), loadAutostart(), loadAccount(), loadKeyState()];
   await Promise.all(parts);
   if (id === settings.loadId) say('setLoadMsg', '');
 }
@@ -103,6 +109,8 @@ function hide() {
   settings.remote = null;
   renderRemote();
   hideKey();
+  settings.noKey = false;
+  closeUseKey();
 }
 
 function failed(msgId, e, fallback) {
@@ -308,6 +316,189 @@ async function removePrivate(p, btn) {
     btn.disabled = false;
     failed('setPrivMsg', e, "The folder couldn't be removed.");
   }
+}
+
+// ===== encrypted folders this PC can't open yet (enter the recovery key later) ========================
+// Shown only when private.keyState says PikPak holds encrypted folders and this PC has no key. The typed key (or
+// password and salt) is read once when Check key is pressed, sent in private.usekey's `recoveryKey` / `salt` args and
+// never kept: the fields are emptied after the check, when the box is closed and whenever Settings is left.
+
+const NO_LIST_TEXT = 'Your recovery key opens your encrypted folders, but PikPak has no list of where they were on your old PC. '
+  + 'Connect each one yourself: press Reconnect' + ELLIPSIS + ' next to it under Encrypted folders in PikPak.';
+
+async function loadKeyState() {
+  const id = settings.loadId;
+  let d = null;
+  try { d = await call('private.keyState'); } catch (e) { d = null; }   // offline: no row, the rest of Settings still works
+  if (id !== settings.loadId) return;
+  settings.noKey = !!(d && d.hasKey === false && d.encryptedData === true);
+  if (!settings.noKey) { closeUseKey(); return; }
+  if (settings.keyPhase === 'off') settings.keyPhase = 'row';
+  renderUseKey();
+}
+
+function renderUseKey() {
+  const phase = settings.noKey ? settings.keyPhase : 'off';
+  $('#setNoKey').hidden = phase !== 'row';
+  $('#setUseKeyForm').hidden = phase !== 'form';
+  $('#setFound').hidden = phase !== 'found';
+}
+
+/** Closes the box and the found list and empties the key fields. */
+function closeUseKey() {
+  useKeyBox.clear();
+  useKeyBox.setPairMode(false);
+  settings.found = null;
+  settings.keyBusy = false;
+  settings.keyPhase = settings.noKey ? 'row' : 'off';
+  for (const m of ['setUseKeyMsg', 'setFoundMsg']) say(m, '');
+  renderUseKey();
+}
+
+function openUseKey() {
+  say('setPrivMsg', '');
+  say('setUseKeyMsg', '');
+  settings.keyPhase = 'form';
+  renderUseKey();
+  useKeyBox.setPairMode(false);
+  useKeyBox.focus();
+}
+
+function setUseKeyBusy(busy) {
+  settings.keyBusy = busy;
+  for (const id of ['#setUseKeyKey', '#setUseKeySalt', '#setUseKeyPairLink', '#setUseKeyCancel', '#setUseKeyCheck']) $(id).disabled = busy;
+}
+
+async function checkUseKey() {
+  if (settings.keyBusy) return;
+  const read = useKeyBox.read();
+  if (read.problem) { say('setUseKeyMsg', read.problem, 'problem'); return; }
+  const args = read.args;
+  const id = settings.loadId;
+  setUseKeyBusy(true);
+  say('setUseKeyMsg', 'Checking your key' + ELLIPSIS, 'busy');
+  let d = null;
+  let failure = null;
+  try {
+    d = await call('private.usekey', args);
+  } catch (e) {
+    failure = e;
+  } finally {
+    args.recoveryKey = '';
+    args.salt = '';
+    setUseKeyBusy(false);
+  }
+  if (id !== settings.loadId) { useKeyBox.clear(); return; }   // Settings was left meanwhile
+  if (failure) {
+    say('setUseKeyMsg', messageOf(failure, "That key couldn't be checked. Try again."), 'problem');
+    useKeyBox.focus();
+    return;
+  }
+  useKeyBox.clear();
+  d = d || {};
+  if (!d.source && asList(d.preview).length) { say('setUseKeyMsg', 'Preview: ' + asList(d.preview).join(' '), 'done'); return; }
+  say('setUseKeyMsg', '');
+  const rows = d.source === 'backup' ? asList(d.folders).map(encRow).filter(Boolean) : [];
+  if (!rows.length) { await keyAcceptedWithoutList(); return; }
+  showFound(rows);
+}
+
+/** The key works but PikPak has no usable list: the folders are connected one by one (Reconnect). */
+async function keyAcceptedWithoutList() {
+  settings.noKey = false;
+  closeUseKey();
+  say('setPrivMsg', NO_LIST_TEXT, 'quiet');
+  await loadRemote();
+}
+
+function showFound(rows) {
+  const mine = new Set(privatePaths(settings.config).map(p => String(p.Name || '').toLowerCase()));
+  for (const r of rows) {
+    if (mine.has(r.name.toLowerCase())) { r.locked = true; r.note = 'Already set up on this PC.'; }
+  }
+  tickDefaults(rows);
+  const waiting = asList(settings.config && settings.config.Pairs).filter(p => p && p.PausedForKey === true).map(p => String(p.Name));
+  settings.found = { rows, waiting };
+  settings.keyPhase = 'found';
+  renderFound();
+}
+
+const foundActions = {
+  sizes: false,
+  tick: (r, on) => { say('setFoundMsg', tickRow(settings.found.rows, r, on), 'problem'); renderFound(); },
+  choose: async r => {
+    say('setFoundMsg', '');
+    let path;
+    try { path = await pickFolder('Where should ' + r.name + ' go on this PC?'); }
+    catch (e) { say('setFoundMsg', "The folder picker didn't open. Try again.", 'problem'); return; }
+    if (!path) return;
+    r.path = path;
+    r.chosen = true;
+    say('setFoundMsg', tickRow(settings.found.rows, r, true), 'problem');
+    renderFound();
+  }
+};
+
+function renderFound() {
+  renderUseKey();
+  const f = settings.found;
+  const list = $('#setFoundList');
+  if (!f) { list.replaceChildren(); return; }
+  $('#setFoundLead').textContent = 'Your recovery key opens these encrypted folders from your backup. Tick the ones to bring back and check where each one goes on this PC.';
+  const note = $('#setFoundNote');
+  note.textContent = f.waiting.length ? 'Synced folders that contain encrypted folders (' + f.waiting.join(', ') + ') are paused until these are restored.' : '';
+  note.hidden = !f.waiting.length;
+  const focused = document.activeElement && list.contains(document.activeElement) ? document.activeElement.dataset.focus : null;
+  list.replaceChildren(...f.rows.map((r, i) => foundRow(r, i, foundActions)));
+  if (focused) {
+    const again = list.querySelector('[data-focus="' + focused + '"]');
+    if (again) again.focus();
+  }
+  $('#setFoundRestore').disabled = settings.keyBusy || !f.rows.some(r => r.on);
+}
+
+/** The ticked rows as raw PrivatePaths entries (the backup's own fields kept) with the place chosen for this PC. */
+function restoreEntries() {
+  return settings.found.rows.filter(r => r.on && r.path && !r.locked).map(r => {
+    if (r.src.entry) return { ...r.src.entry, Path: r.path };
+    const e = { Path: r.path, Name: r.name };
+    if (r.src.id) e.Id = String(r.src.id);
+    return e;
+  });
+}
+
+async function restoreFound() {
+  if (settings.keyBusy || !settings.found) return;
+  const entries = restoreEntries();
+  if (!entries.length) return;
+  const id = settings.loadId;
+  settings.keyBusy = true;
+  $('#setFoundRestore').disabled = true;
+  $('#setFoundCancel').disabled = true;
+  say('setFoundMsg', 'Restoring' + ELLIPSIS, 'busy');
+  let r;
+  try {
+    r = await call('private.restore', { entries });
+  } catch (e) {
+    settings.keyBusy = false;
+    $('#setFoundCancel').disabled = false;
+    if (id === settings.loadId) { say('setFoundMsg', messageOf(e, "Your encrypted folders couldn't be restored."), 'problem'); renderFound(); }
+    return;
+  }
+  settings.keyBusy = false;
+  $('#setFoundCancel').disabled = false;
+  if (id !== settings.loadId) return;
+  if (r && r.saved === false && r.preview) { say('setFoundMsg', 'Preview: ' + asList(r.preview).join(' '), 'done'); renderFound(); return; }
+  const added = asList(r && r.added), resumed = asList(r && r.resumed), still = asList(r && r.stillPaused);
+  const one = n => n === 1;
+  let text = 'Restored ' + (one(added.length) ? "'" + added[0] + "'" : added.length + ' encrypted folders') + '. Their files come down at the next sync.';
+  if (resumed.length) text += ' ' + resumed.join(', ') + (one(resumed.length) ? ' is' : ' are') + ' syncing again.';
+  if (still.length) text += ' ' + still.join(', ') + (one(still.length) ? ' stays' : ' stay') + ' paused, because none of the restored encrypted folders is inside '
+    + (one(still.length) ? 'it' : 'them') + '. Resume ' + (one(still.length) ? 'it' : 'them') + ' on Home when that is right.';
+  settings.noKey = false;
+  closeUseKey();
+  say('setPrivMsg', text, 'done');
+  await refreshConfig();
 }
 
 // ===== encrypted folders in PikPak ====================================================================
@@ -619,6 +810,12 @@ export function wireSettings() {
   $('#setLogon').addEventListener('change', changeLogon);
   $('#setBw').addEventListener('change', toggleBandwidth);
   $('#setAddPrivate').addEventListener('click', addPrivate);
+  $('#setNoKeyEnter').addEventListener('click', openUseKey);
+  $('#setUseKeyForm').addEventListener('submit', e => { e.preventDefault(); checkUseKey(); });
+  $('#setUseKeyPairLink').addEventListener('click', () => { useKeyBox.setPairMode(!useKeyBox.pairMode); say('setUseKeyMsg', ''); useKeyBox.focus(); });
+  $('#setUseKeyCancel').addEventListener('click', closeUseKey);
+  $('#setFoundCancel').addEventListener('click', closeUseKey);
+  $('#setFoundRestore').addEventListener('click', restoreFound);
   $('#setRemoteShow').addEventListener('click', loadRemote);
   $('#setShowKey').addEventListener('click', toggleKey);
   $('#setKeyCopy').addEventListener('click', copyKeyNow);
@@ -628,5 +825,5 @@ export function wireSettings() {
   $('#advHoldingBrowse').addEventListener('click', () => browseInto('#advHolding', 'Choose a folder for deleted files'));
   $('#advSave').addEventListener('click', saveAdvanced);
   // The key must not stay on screen when the window goes to the tray.
-  document.addEventListener('visibilitychange', () => { if (document.hidden) hideKey(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { hideKey(); useKeyBox.clear(); } });
 }

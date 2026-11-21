@@ -36,7 +36,6 @@ const rs = {
   rows: [],
   active: false,      // the owner pressed Restore: setup.finish restores instead of using Choose folders
   checking: false,    // setup.usekey with a typed key is running
-  pairMode: false,    // the key is a password and a salt
   previewLines: []    // what discover / scan / usekey would have done (preview mode)
 };
 
@@ -62,9 +61,10 @@ export function afterSignin(account) {
   rs.seq++;
   Object.assign(rs, {
     phase: 'discover', error: null, retry: null, canSkip: false, discover: null, encrypted: null,
-    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, pairMode: false, previewLines: []
+    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, previewLines: []
   });
-  clearKeyFields();
+  oldBox.pairMode = false;
+  oldBox.clear();
   go('found');
   runDiscover();
 }
@@ -182,6 +182,27 @@ function placeOfPair(p) {
   return p && p.Remote ? BASE_REMOTE + ':' + root + '/' + String(p.Remote) : null;
 }
 
+/**
+ * One row of the found list for an encrypted folder of private.usekey / setup.usekey's answer ({name, id, lastPath,
+ * paused, entry, resolved}); null when it has no name. Shared with Settings (Enter recovery key).
+ */
+export function encRow(f) {
+  if (!f || !f.name) return null;
+  const res = f.resolved || {};
+  return {
+    kind: 'enc', name: String(f.name), src: f,
+    path: res.Path ? String(res.Path) : null,
+    oldPath: f.lastPath ? String(f.lastPath) : '',
+    driveMissing: res.DriveMissing === true || !res.Path,
+    chosen: false,
+    holds: false,
+    paused: f.paused === true,
+    place: PRIVATE_REMOTE + ':' + String(f.name),
+    bytes: undefined,
+    on: false
+  };
+}
+
 function buildRows(pairs) {
   const rows = [];
   for (const p of pairs) {
@@ -202,26 +223,18 @@ function buildRows(pairs) {
   }
   const enc = rs.encrypted && !rs.keySkipped ? asList(rs.encrypted.folders) : [];
   for (const f of enc) {
-    if (!f || !f.name) continue;
-    const res = f.resolved || {};
-    rows.push({
-      kind: 'enc', name: String(f.name), src: f,
-      path: res.Path ? String(res.Path) : null,
-      oldPath: f.lastPath ? String(f.lastPath) : '',
-      driveMissing: res.DriveMissing === true || !res.Path,
-      chosen: false,
-      holds: false,
-      paused: f.paused === true,
-      place: PRIVATE_REMOTE + ':' + String(f.name),
-      bytes: undefined,
-      on: false
-    });
+    const r = encRow(f);
+    if (r) rows.push(r);
   }
-  // Ticked when its place is on this PC; a second folder with the same name stays unticked.
-  for (const r of rows) {
-    r.on = !r.driveMissing && !!r.path && !rows.some(o => o !== r && o.on && sameName(o.name, r.name));
-  }
+  tickDefaults(rows);
   rs.rows = rows;
+}
+
+/** Ticked when its place is on this PC; a second folder with the same name stays unticked. A locked row never is. */
+export function tickDefaults(rows) {
+  for (const r of rows) {
+    r.on = r.locked !== true && !r.driveMissing && !!r.path && !rows.some(o => o !== r && o.on && sameName(o.name, r.name));
+  }
 }
 
 async function loadSizes() {
@@ -246,18 +259,26 @@ async function loadSizes() {
   if (hooks.current() === 'found') renderFound();
 }
 
-function setTicked(r, on) {
-  say('foundMsg', '');
+/**
+ * Ticks or unticks a row of `rows`. Returns '' or the problem to show: a row without a place can't be ticked and
+ * only one folder of a name can be restored. Shared with Settings.
+ */
+export function tickRow(rows, r, on) {
   if (on) {
-    if (!r.path) { r.on = false; return; }
-    const other = rs.rows.find(o => o !== r && o.on && sameName(o.name, r.name));
+    if (!r.path) { r.on = false; return ''; }
+    const other = rows.find(o => o !== r && o.on && sameName(o.name, r.name));
     if (other) {
       r.on = false;
-      say('foundMsg', 'Only one folder named ' + r.name + ' can be restored. Untick the other one first.', 'problem');
-      return;
+      return 'Only one folder named ' + r.name + ' can be restored. Untick the other one first.';
     }
   }
   r.on = on;
+  return '';
+}
+
+function setTicked(r, on) {
+  const problem = tickRow(rs.rows, r, on);
+  say('foundMsg', problem, 'problem');
 }
 
 async function choosePlace(r) {
@@ -301,13 +322,19 @@ function totalLine() {
   return text;
 }
 
-function rowView(r, i) {
+/**
+ * One row of a found list. `on` is what the screen does: tick(r, on) after the box changed, choose(r) for Choose
+ * place; on.sizes === false leaves the size column empty. A row with `locked` (and a `note`) can't be ticked.
+ * Shared with Settings (Enter recovery key).
+ */
+export function foundRow(r, i, on) {
   const box = h('input', { type: 'checkbox', 'aria-label': 'Restore ' + r.name, 'data-focus': 'on' + i });
   box.checked = r.on;
-  box.disabled = !r.path;
-  box.addEventListener('change', () => { setTicked(r, box.checked); renderFound(); });
+  box.disabled = !r.path || r.locked === true;
+  box.addEventListener('change', () => on.tick(r, box.checked));
   let size;
-  if (r.bytes === undefined) size = ELLIPSIS;
+  if (on.sizes === false) size = '';
+  else if (r.bytes === undefined) size = ELLIPSIS;
   else if (r.bytes === null) size = '?';
   else size = fmtSize(r.bytes);
   const issues = [];
@@ -315,13 +342,14 @@ function rowView(r, i) {
     const drive = driveOf(r.oldPath);
     issues.push(h('div', { class: 'fissue warn' },
       drive ? 'drive ' + drive + " isn't on this PC " : 'Choose where it goes on this PC ',
-      h('button', { class: 'btn btn-quiet', text: 'Choose place' + ELLIPSIS, 'aria-label': 'Choose a place for ' + r.name, 'data-focus': 'place' + i, onclick: () => choosePlace(r) })));
+      h('button', { class: 'btn btn-quiet', text: 'Choose place' + ELLIPSIS, 'aria-label': 'Choose a place for ' + r.name, 'data-focus': 'place' + i, onclick: () => on.choose(r) })));
   } else if (r.driveMissing) {
     issues.push(h('div', {},
-      h('button', { class: 'btn btn-quiet', text: 'Choose place' + ELLIPSIS, 'aria-label': 'Choose another place for ' + r.name, 'data-focus': 'place' + i, onclick: () => choosePlace(r) })));
+      h('button', { class: 'btn btn-quiet', text: 'Choose place' + ELLIPSIS, 'aria-label': 'Choose another place for ' + r.name, 'data-focus': 'place' + i, onclick: () => on.choose(r) })));
   }
   const pausedForKey = r.holds && !r.paused && (rs.keySkipped || !rs.rows.some(o => o.kind === 'enc' && o.on));
   if (pausedForKey) issues.push(h('div', { class: 'fissue warn', text: HOLDS_NOTE }));
+  if (r.note) issues.push(h('div', { class: 'fissue warn', text: r.note }));
   const shownPath = r.path || r.oldPath;
   return h('div', { class: 'frow' + (r.on ? '' : ' off') },
     box,
@@ -332,6 +360,12 @@ function rowView(r, i) {
     h('div', { class: 'fsize', text: size }),
     r.paused ? h('span', { class: 'pill wait', text: 'Paused' }) : h('span'));
 }
+
+const setupRowActions = {
+  tick: (r, on) => { setTicked(r, on); renderFound(); },
+  choose: r => choosePlace(r)
+};
+const rowView = (r, i) => foundRow(r, i, setupRowActions);
 
 function renderFound() {
   stepNumbers();
@@ -412,27 +446,48 @@ function foundBack() {
 
 // ===== the key screen ===============================================================================
 
-function clearKeyFields() {
-  const k = $('#oldkeyKey');
-  const s = $('#oldkeySalt');
-  if (k) k.value = '';
-  if (s) s.value = '';
+/**
+ * The key fields of a form whose elements are <prefix>Key, <prefix>Label, <prefix>SaltRow, <prefix>Salt and
+ * <prefix>PairLink: one field for the 30-character recovery key, or Password plus Salt for a key made by the
+ * installer. The setup key screen ('oldkey') and Settings ('setUseKey') use the same box. The typed values live only
+ * in the fields; clear() empties them.
+ */
+export function keyBox(prefix) {
+  const q = s => $('#' + prefix + s);
+  const box = {
+    pairMode: false,
+    clear() {
+      for (const id of ['Key', 'Salt']) { const el = q(id); if (el) el.value = ''; }
+    },
+    setPairMode(on) {
+      box.pairMode = on;
+      q('SaltRow').hidden = !on;
+      q('Label').textContent = on ? 'Password' : 'Recovery key';
+      q('Key').type = on ? 'password' : 'text';
+      q('PairLink').textContent = on ? 'My key is a recovery key' : 'My key is a password and a salt';
+      if (!on) q('Salt').value = '';
+    },
+    /** {args: {recoveryKey, salt?}} to send once, or {problem} when a field is empty. */
+    read() {
+      const args = { recoveryKey: q('Key').value };
+      if (box.pairMode) args.salt = q('Salt').value;
+      if (!args.recoveryKey.trim() || (box.pairMode && !args.salt.trim())) {
+        return { problem: box.pairMode ? 'Type both the password and the salt of your key.' : 'Type your recovery key.' };
+      }
+      return { args };
+    },
+    focus() { q('Key').focus(); }
+  };
+  return box;
 }
 
-function setPairMode(on) {
-  rs.pairMode = on;
-  $('#oldkeySaltRow').hidden = !on;
-  $('#oldkeyLabel').textContent = on ? 'Password' : 'Recovery key';
-  $('#oldkeyKey').type = on ? 'password' : 'text';
-  $('#oldkeyPairLink').textContent = on ? 'My key is a recovery key' : 'My key is a password and a salt';
-  if (!on) $('#oldkeySalt').value = '';
-}
+const oldBox = keyBox('oldkey');
 
 function showOldkey() {
   stepNumbers();
   if (!rs.checking) say('oldkeyMsg', '');
-  setPairMode(rs.pairMode);
-  $('#oldkeyKey').focus();
+  oldBox.setPairMode(oldBox.pairMode);
+  oldBox.focus();
 }
 
 function setKeyBusy(busy) {
@@ -442,12 +497,12 @@ function setKeyBusy(busy) {
 
 async function checkKey() {
   if (rs.checking) return;
-  const args = { recoveryKey: $('#oldkeyKey').value };
-  if (rs.pairMode) args.salt = $('#oldkeySalt').value;
-  if (!args.recoveryKey.trim() || (rs.pairMode && !args.salt.trim())) {
-    say('oldkeyMsg', rs.pairMode ? 'Type both the password and the salt of your key.' : 'Type your recovery key.', 'problem');
+  const read = oldBox.read();
+  if (read.problem) {
+    say('oldkeyMsg', read.problem, 'problem');
     return;
   }
+  const args = read.args;
   setKeyBusy(true);
   say('oldkeyMsg', 'Checking your key' + ELLIPSIS, 'busy');
   const seq = ++rs.seq;
@@ -465,10 +520,10 @@ async function checkKey() {
   if (seq !== rs.seq) return;
   if (failure) {
     say('oldkeyMsg', messageOf(failure, "That key couldn't be checked. Try again."), 'problem');
-    $('#oldkeyKey').focus();
+    oldBox.focus();
     return;
   }
-  clearKeyFields();
+  oldBox.clear();
   say('oldkeyMsg', '');
   addPreview(d);
   rs.encrypted = d;
@@ -478,7 +533,7 @@ async function checkKey() {
 
 function skipKey() {
   if (rs.checking) return;
-  clearKeyFields();
+  oldBox.clear();
   say('oldkeyMsg', '');
   rs.encrypted = null;
   rs.keySkipped = true;
@@ -533,14 +588,14 @@ export function previewLines() {
 export function restoreScreens(x) {
   hooks = x;
   return {
-    oldkey: { show: showOldkey, hide: clearKeyFields },
+    oldkey: { show: showOldkey, hide: () => oldBox.clear() },
     found: { show: renderFound }
   };
 }
 
 export function wireRestore() {
   $('#oldkeyForm').addEventListener('submit', e => { e.preventDefault(); checkKey(); });
-  $('#oldkeyPairLink').addEventListener('click', () => { setPairMode(!rs.pairMode); say('oldkeyMsg', ''); $('#oldkeyKey').focus(); });
+  $('#oldkeyPairLink').addEventListener('click', () => { oldBox.setPairMode(!oldBox.pairMode); say('oldkeyMsg', ''); oldBox.focus(); });
   $('#oldkeySkip').addEventListener('click', skipKey);
   $('#oldkeyBack').addEventListener('click', () => { rs.seq++; rs.phase = 'off'; hooks.go('signin'); });
   $('#foundBack').addEventListener('click', foundBack);

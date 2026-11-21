@@ -2951,6 +2951,127 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             Test-GuiExistingKeyOpens -Ctx @{ Config = $null } | Should -BeTrue
         }
     }
+
+    Context 'private.restore' {
+        BeforeEach {
+            $script:GidV = '22222222-aaaa-4bbb-8ccc-000000000001'
+            $script:GidT = '22222222-aaaa-4bbb-8ccc-000000000002'
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $script:S = New-TestSetup
+            # Docs holds an encrypted folder (Vault) and was paused for the missing key; Pics was paused by the
+            # owner; Other was paused for the key but nothing restored will sit inside it.
+            $raw = Get-RawMirrorConfig -Path $script:S.Path
+            $raw.Pairs = @(
+                @{ Name = 'Docs'; Local = $script:S.Docs; Remote = 'T/Docs'; Priority = 1; Paused = $true; PausedForKey = $true }
+                @{ Name = 'Pics'; Local = $script:S.Pics; Remote = 'T/Pics'; Priority = 2; Paused = $true }
+                @{ Name = 'Other'; Local = $script:S.Other; Remote = 'T/Other'; Priority = 3; Paused = $true; PausedForKey = $true }
+            )
+            [IO.File]::WriteAllText($script:S.Path, (ConvertTo-MirrorConfigText -Config $raw), (New-Object Text.UTF8Encoding $true))
+            $script:Vault = Join-Path $script:S.Docs 'Vault'
+        }
+
+        It 'private.restore adds entries and resumes pairs paused for the key' {
+            $e = @(@{ Path = $script:Vault; Name = 'Vault'; Id = $script:GidV }, @{ Path = (Join-Path $script:S.Root 'Taxes'); Name = 'Taxes'; Id = $script:GidT; Paused = $true })
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = $e }) $script:S.Path
+            $r.ok | Should -BeTrue
+            $r.data.saved | Should -BeTrue
+            (@($r.data.added) -join ',') | Should -Be 'Vault,Taxes'
+            (@($r.data.resumed) -join ',') | Should -Be 'Docs'
+            $raw = Get-RawMirrorConfig -Path $script:S.Path
+            $priv = @($raw.PrivatePaths)
+            $priv.Count | Should -Be 2
+            $priv[0].Name | Should -Be 'Vault'
+            $priv[0].Id | Should -Be $script:GidV
+            $priv[0].Path | Should -Be $script:Vault
+            $priv[1].Name | Should -Be 'Taxes'
+            $priv[1].Id | Should -Be $script:GidT
+            $priv[1].Paused | Should -BeTrue
+            $docs = @($raw.Pairs) | Where-Object { $_.Name -eq 'Docs' }
+            $docs.ContainsKey('Paused') | Should -BeFalse
+            $docs.ContainsKey('PausedForKey') | Should -BeFalse
+            # The encrypted folders are confirmed, so the next sync does not stop on them.
+            $state = Get-MirrorState -StateDir $script:S.StateDir
+            $state.PrivateConfirmedHash | Should -Be (Get-PrivatePathsHash -Config (Get-MirrorConfig -Path $script:S.Path))
+        }
+
+        It 'private.restore leaves pairs the owner paused alone' {
+            $e = @(@{ Path = $script:Vault; Name = 'Vault'; Id = $script:GidV })
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = $e }) $script:S.Path
+            $r.ok | Should -BeTrue
+            $pairs = @((Get-RawMirrorConfig -Path $script:S.Path).Pairs)
+            $pics = $pairs | Where-Object { $_.Name -eq 'Pics' }
+            $pics.Paused | Should -BeTrue
+            $pics.ContainsKey('PausedForKey') | Should -BeFalse
+            @($r.data.resumed) -contains 'Pics' | Should -BeFalse
+        }
+
+        It 'private.restore keeps a pair paused when no encrypted folder of it was restored' {
+            $e = @(@{ Path = $script:Vault; Name = 'Vault'; Id = $script:GidV })
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = $e }) $script:S.Path
+            $other = @((Get-RawMirrorConfig -Path $script:S.Path).Pairs) | Where-Object { $_.Name -eq 'Other' }
+            $other.Paused | Should -BeTrue
+            $other.PausedForKey | Should -BeTrue
+            (@($r.data.stillPaused) -join ',') | Should -Be 'Other'
+        }
+
+        It 'private.restore refuses while a sync runs' {
+            Mock Test-SyncRunning { $true }
+            $before = [IO.File]::ReadAllText($script:S.Path)
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault' }) }) $script:S.Path
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'locked'
+            [IO.File]::ReadAllText($script:S.Path) | Should -BeExactly $before
+        }
+
+        It 'private.restore needs a config' {
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault' }) }) $script:NoCfg
+            $r.error.code | Should -Be 'config-missing'
+        }
+
+        It 'private.restore skips names and places that are already configured' {
+            $s2 = New-TestSetup -Private
+            $e = @(
+                @{ Path = (Join-Path $s2.Root 'Elsewhere'); Name = 'photos'; Id = $script:GidT }
+                @{ Path = $s2.Photos; Name = 'Renamed'; Id = $script:GidV }
+                @{ Path = (Join-Path $s2.Root 'Taxes'); Name = 'Taxes'; Id = '22222222-aaaa-4bbb-8ccc-000000000003' }
+            )
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = $e }) $s2.Path
+            $r.ok | Should -BeTrue
+            (@($r.data.added) -join ',') | Should -Be 'Taxes'
+            (@($r.data.skipped) -join ',') | Should -Be 'photos,Renamed'
+            $priv = @((Get-RawMirrorConfig -Path $s2.Path).PrivatePaths)
+            (@($priv | ForEach-Object { $_.Name }) -join ',') | Should -Be 'Photos,Taxes'
+        }
+
+        It 'private.restore refuses without this PC''s recovery key' {
+            $script:KeyRemotes = @('pikpak:')
+            $before = [IO.File]::ReadAllText($script:S.Path)
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault' }) }) $script:S.Path
+            $r.error.code | Should -Be 'refused'
+            [IO.File]::ReadAllText($script:S.Path) | Should -BeExactly $before
+        }
+
+        It 'private.restore refuses a folder that is a synced folder or has no name or is not on a drive' {
+            $before = [IO.File]::ReadAllText($script:S.Path)
+            (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:S.Pics; Name = 'Pics2' }) }) $script:S.Path).error.code | Should -Be 'refused'
+            (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = '' }) }) $script:S.Path).error.code | Should -Be 'bad-request'
+            (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = 'Vault'; Name = 'Vault' }) }) $script:S.Path).error.code | Should -Be 'bad-request'
+            (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault'; Id = 'not-an-id' }) }) $script:S.Path).error.code | Should -Be 'bad-request'
+            (Invoke-Req (New-Req 'private.restore' @{ entries = @() }) $script:S.Path).error.code | Should -Be 'bad-request'
+            [IO.File]::ReadAllText($script:S.Path) | Should -BeExactly $before
+        }
+
+        It 'private.restore in preview writes nothing' {
+            $before = [IO.File]::ReadAllText($script:S.Path)
+            Mock Save-PrivateConfirmation { throw 'must not confirm' }
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault'; Id = $script:GidV }) } -Preview) $script:S.Path
+            $r.ok | Should -BeTrue
+            $r.data.saved | Should -BeFalse
+            @($r.data.preview).Count | Should -BeGreaterThan 1
+            [IO.File]::ReadAllText($script:S.Path) | Should -BeExactly $before
+            Test-Path -LiteralPath ($script:S.Path + '.bak') | Should -BeFalse
+        }
+    }
 }
 
 Describe 'Invoke-GuiRequest: restore from the backup' {

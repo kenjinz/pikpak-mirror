@@ -217,6 +217,114 @@ function Invoke-GuiActionPrivateKeyState {
     @{ hasKey = $false; encryptedData = ($raw -gt 0) }
 }
 
+function Get-GuiRestoreEntries {
+    # args.entries of private.restore, checked: one hashtable per encrypted folder (Path in canonical spelling, Name,
+    # Id when given and valid, Paused and any other plain per-folder field the backup carried). Anything that is not a
+    # plain value is dropped. bad-request when nothing usable was sent.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $rows = @(@(Get-GuiArg $Ctx 'entries' @()) | Where-Object { $null -ne $_ })
+    if ($rows.Count -eq 0) { throw (New-GuiException 'bad-request' 'Choose at least one encrypted folder to restore.') }
+    $out = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($row in $rows) {
+        if ($row -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') }
+        $name = ([string]$row['Name']).Trim()
+        if ($name -eq '') { throw (New-GuiException 'bad-request' 'An encrypted folder has no name.') }
+        $raw = [string]$row['Path']
+        $p = $null
+        try { $p = ConvertTo-MirrorPath $raw } catch { $p = $null }
+        if ([string]::IsNullOrWhiteSpace($p) -or $p -notmatch '^[A-Za-z]:\\' -or $p.Contains('%')) {
+            throw (New-GuiException 'bad-request' ("'{0}' isn't a folder on a drive of this PC (like D:\Photos). Choose where '{1}' goes." -f $raw, $name))
+        }
+        $e = @{}
+        foreach ($k in @($row.Keys)) {
+            $v = $row[$k]
+            if ($v -is [string] -or $v -is [bool] -or $v -is [int] -or $v -is [long] -or $v -is [double]) { $e[[string]$k] = $v }
+        }
+        $e['Path'] = $p
+        $e['Name'] = $name
+        if ($e.ContainsKey('Id')) {
+            if ([string]::IsNullOrEmpty([string]$e['Id'])) { $e.Remove('Id') }
+            elseif (-not (Test-FolderId ([string]$e['Id']))) { throw (New-GuiException 'bad-request' ("The ID of '{0}' is not valid." -f $name)) }
+        }
+        if ($e.ContainsKey('Paused') -and $e['Paused'] -isnot [bool]) { $e.Remove('Paused') }
+        $out.Add($e)
+    }
+    , $out.ToArray()
+}
+
+function Invoke-GuiActionPrivateRestore {
+    # After the recovery key was entered (private.usekey): adds the chosen encrypted folders (raw PrivatePaths entries,
+    # paths as the owner placed them; Name and Id kept) and resumes the synced folders that were paused only for the
+    # missing key. An entry whose name or place is already configured is skipped. A synced folder resumes only when an
+    # encrypted folder now sits inside it (that is what keeps it out of PikPak readable); else it stays paused.
+    # A pair the owner paused has no PausedForKey and is never touched.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $cfg = $Ctx.Config
+    $entries = Get-GuiRestoreEntries -Ctx $Ctx
+    Assert-GuiNotSyncing $Ctx
+    Assert-GuiPrivateRemote $Ctx
+
+    $existing = @(@($cfg['PrivatePaths']) | Where-Object { $_ })
+    $probe = @{} + $cfg
+    $probePrivs = New-Object System.Collections.Generic.List[object]
+    foreach ($x in $existing) { $probePrivs.Add($x) }
+    $usedIds = @{}
+    foreach ($f in @(Get-SyncFolders -Config $cfg)) { if (-not [string]::IsNullOrEmpty([string]$f.Id)) { $usedIds[([string]$f.Id).ToLowerInvariant()] = $true } }
+    $added = New-Object System.Collections.Generic.List[hashtable]
+    $skipped = New-Object System.Collections.Generic.List[string]
+    foreach ($e in $entries) {
+        $dup = $false
+        foreach ($x in $probePrivs) {
+            if ([string]$x.Name -ieq [string]$e.Name -or (Get-GuiFolderRelation ([string]$e.Path) ([string]$x.Path)) -eq 'same') { $dup = $true; break }
+        }
+        if ($dup) { $skipped.Add([string]$e.Name); continue }
+        $probe['PrivatePaths'] = $probePrivs.ToArray()
+        $why = Get-GuiPrivateOverlapMessage -Config $probe -Path ([string]$e.Path)
+        if ($null -ne $why) { throw (New-GuiException 'refused' $why) }
+        if ($e.ContainsKey('Id')) {
+            $idKey = ([string]$e['Id']).ToLowerInvariant()
+            if ($usedIds.ContainsKey($idKey)) { throw (New-GuiException 'refused' ("The ID of '{0}' is already used by another folder of this PC." -f $e.Name)) }
+            $usedIds[$idKey] = $true
+        }
+        $probePrivs.Add($e)
+        $added.Add($e)
+    }
+
+    $raw = Get-RawMirrorConfig -Path $Ctx.ConfigPath
+    $raw['PrivatePaths'] = @(@($raw['PrivatePaths']) | Where-Object { $_ }) + @($added.ToArray())
+    $privKeys = @()
+    foreach ($x in @($raw['PrivatePaths'])) {
+        try { $privKeys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$x['Path']))) } catch { }
+    }
+    $resumed = New-Object System.Collections.Generic.List[string]
+    $still = New-Object System.Collections.Generic.List[string]
+    foreach ($pair in @(@($raw['Pairs']) | Where-Object { $_ })) {
+        if ($pair['PausedForKey'] -ne $true) { continue }
+        $covered = $false
+        try {
+            $localKey = ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$pair['Local']))
+            foreach ($pk in $privKeys) { if ($pk.StartsWith($localKey, [StringComparison]::Ordinal)) { $covered = $true; break } }
+        }
+        catch { $covered = $false }
+        if ($covered) { $pair.Remove('Paused'); $pair.Remove('PausedForKey'); $resumed.Add([string]$pair['Name']) }
+        else { $still.Add([string]$pair['Name']) }
+    }
+
+    Save-GuiConfig -Ctx $Ctx -Config $raw
+    if (Test-GuiPreview $Ctx) {
+        $lines = New-Object System.Collections.Generic.List[string]
+        foreach ($e in $added) { $lines.Add(("Would restore the encrypted folder '{0}' at {1}." -f $e.Name, $e.Path)) }
+        foreach ($n in $skipped) { $lines.Add(("Would skip '{0}': it is already set up on this PC." -f $n)) }
+        foreach ($n in $resumed) { $lines.Add(("Would resume '{0}'. It syncs again at the next sync." -f $n)) }
+        foreach ($n in $still) { $lines.Add(("'{0}' stays paused: none of the encrypted folders restored is inside it." -f $n)) }
+        $lines.Add('Would record that you confirmed the encrypted folders.')
+        return @{ saved = $false; added = @($added | ForEach-Object { [string]$_.Name }); skipped = $skipped.ToArray(); resumed = $resumed.ToArray(); stillPaused = $still.ToArray(); preview = $lines.ToArray() }
+    }
+    Save-GuiPrivateConfirmation $Ctx
+    @{ saved = $true; added = @($added | ForEach-Object { [string]$_.Name }); skipped = $skipped.ToArray(); resumed = $resumed.ToArray(); stillPaused = $still.ToArray()
+        privatePaths = @(@((Get-RawMirrorConfig -Path $Ctx.ConfigPath)['PrivatePaths']) | Where-Object { $_ }) }
+}
+
 # ===== Setup with a restore ==========================================================================
 # After sign-in: setup.discover reads the backup, setup.scan rebuilds the list from the ID files when there is no
 # backup, setup.sizes asks PikPak how much each folder holds, and setup.finish with args.restore saves the chosen

@@ -224,6 +224,24 @@
 
       <h4 class="section">Encrypted folders</h4>
       <div class="set" id="setPrivList"></div>
+      <div class="set" id="setNoKey" style="margin-top:.5rem" hidden>
+        <div class="srow"><span id="setNoKeyText">Your PikPak has encrypted folders this PC can't open yet.</span><button class="btn" id="setNoKeyEnter">Enter recovery key&hellip;</button></div>
+      </div>
+      <form id="setUseKeyForm" style="margin-top:.5rem" novalidate hidden>
+        <p class="small">Type your recovery key to open them.</p>
+        <label class="field"><span id="setUseKeyLabel">Recovery key</span><input type="text" id="setUseKeyKey" autocomplete="off" spellcheck="false" autocapitalize="characters"></label>
+        <label class="field" id="setUseKeySaltRow" hidden><span>Salt</span><input type="password" id="setUseKeySalt" autocomplete="off" spellcheck="false"></label>
+        <p class="msg" id="setUseKeyMsg" aria-live="polite" hidden></p>
+        <div class="row-actions"><button class="btn btn-quiet" type="button" id="setUseKeyPairLink">My key is a password and a salt</button></div>
+        <div class="row-actions" style="margin-top:.4rem"><button class="btn" type="button" id="setUseKeyCancel">Cancel</button><button class="btn btn-primary" type="submit" id="setUseKeyCheck">Check key</button></div>
+      </form>
+      <div id="setFound" style="margin-top:.5rem" hidden>
+        <p class="small" id="setFoundLead"></p>
+        <p class="note" id="setFoundNote" hidden></p>
+        <div class="folders" id="setFoundList"></div>
+        <p class="msg" id="setFoundMsg" aria-live="polite" hidden></p>
+        <div class="row-actions" style="margin-top:.5rem"><button class="btn" id="setFoundCancel">Not now</button><button class="btn btn-primary" id="setFoundRestore">Restore</button></div>
+      </div>
       <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="setAddPrivate">Add encrypted folder</button></div>
       <p class="msg" id="setPrivMsg" aria-live="polite" hidden></p>
 
