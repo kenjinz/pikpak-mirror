@@ -70,8 +70,9 @@ function Get-GuiKeyArgs {
 
 function Get-GuiEncryptedRestoreList {
     # The encrypted folders the key opens: @{ source = 'backup'|'idfiles'; folders = @(@{ name; id; lastPath; paused;
-    # entry }) }. From the companion file in the encrypted remote when it is a valid backup (entry = the raw entry
-    # of the config); otherwise one row per folder in the remote with its ID file (entry = $null).
+    # entry }) }. From the companion file in the encrypted remote when it is a valid backup that lists at least one
+    # folder (entry = the raw entry of the config); otherwise one row per folder in the remote with its ID file
+    # (entry = $null).
     param([Parameter(Mandatory)][hashtable]$Ctx)
     $names = Get-GuiKeyRemotes -Ctx $Ctx
     $remote = $names.Private + ':'
@@ -86,7 +87,8 @@ function Get-GuiEncryptedRestoreList {
                 $last = $null; if (-not [string]::IsNullOrEmpty([string]$e['Path'])) { $last = [string]$e['Path'] }
                 $rows.Add(@{ name = [string]$e['Name']; id = $id; lastPath = $last; paused = ($e['Paused'] -eq $true); entry = $e })
             }
-            return @{ source = 'backup'; folders = $rows.ToArray() }
+            # A companion file that lists no encrypted folder says nothing about what PikPak holds.
+            if ($rows.Count -gt 0) { return @{ source = 'backup'; folders = $rows.ToArray() } }
         }
     }
     # No usable companion file: what PikPak itself holds. Get-GuiRemotePrivateNames needs a config for the remote
@@ -114,7 +116,7 @@ function Get-GuiEncryptedRestoreList {
 function Get-GuiExistingKeyState {
     # What the 'private' rclone remote on this PC does: 'none' (no such remote), 'opens' (it opens the data in
     # PikPak, or PikPak holds nothing to contradict it), 'wrong' (PikPak holds data and the remote opens none of it)
-    # or 'unchecked' (PikPak could not be listed). Changes nothing. -RawCount reuses a count of PC-Private entries
+    # or 'unchecked' (PikPak, or the remote, could not be listed: "try again", never "wrong"). Changes nothing. -RawCount reuses a count of PC-Private entries
     # the caller already has.
     param([Parameter(Mandatory)][hashtable]$Ctx, [int]$RawCount = -2)
     $names = Get-GuiKeyRemotes -Ctx $Ctx
@@ -123,7 +125,7 @@ function Get-GuiExistingKeyState {
     if ($RawCount -lt 0) { return 'unchecked' }
     if ($RawCount -eq 0) { return 'opens' }
     $x = Invoke-GuiRclone -RcloneArgs @('lsf', ($names.Private + ':'), '--dirs-only')
-    if ($x.ExitCode -ne 0) { return 'wrong' }
+    if ($x.ExitCode -ne 0) { return 'unchecked' }
     if (@(@($x.Output) | ForEach-Object { ([string]$_).TrimEnd('/') } | Where-Object { Test-EncryptedFolderName $_ }).Count -gt 0) { return 'opens' }
     # No folder of its own (only files or the holding area): anything the key decrypts shows it is the right key.
     if ((Get-RemoteEntryCount -Target ($names.Private + ':')) -gt 0) { return 'opens' }
@@ -198,4 +200,195 @@ function Invoke-GuiActionPrivateKeyState {
     $raw = Get-RemoteEntryCount -Target ($names.Base + ':PC-Private')
     if ($raw -lt 0) { throw (New-GuiException 'remote-failed' "PikPak couldn't be checked. Try again.") }
     @{ hasKey = $false; encryptedData = ($raw -gt 0) }
+}
+
+# ===== Setup with a restore ==========================================================================
+# After sign-in: setup.discover reads the backup, setup.scan rebuilds the list from the ID files when there is no
+# backup, setup.sizes asks PikPak how much each folder holds, and setup.finish with args.restore saves the chosen
+# folders. None of them needs a config. Restore never deletes anything in PikPak.
+
+function Get-GuiMirrorRootName {
+    param([hashtable]$Ctx)
+    if ($null -ne $Ctx -and $null -ne $Ctx.Config -and -not [string]::IsNullOrWhiteSpace([string]$Ctx.Config.MirrorRoot)) { return [string]$Ctx.Config.MirrorRoot }
+    'PC-Mirror'
+}
+
+function Get-GuiRestorePathInfo {
+    # Where a backed-up local path goes on this PC (Resolve-RestorePath). No path: nowhere yet, so the row needs a
+    # place chosen.
+    param([AllowNull()][AllowEmptyString()][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return @{ Path = $null; Moved = $false; DriveMissing = $true } }
+    Resolve-RestorePath -Path $Path -UserProfile ([string]$env:USERPROFILE) -PathExists { param($p) Test-Path -LiteralPath $p }
+}
+
+function Invoke-GuiActionSetupDiscover {
+    # @{ backup; backupProblem; encryptedData; hasKey }: the parsed backup with each Pair's Resolved place (or $null),
+    # why a backup file that exists could not be used, whether PikPak holds encrypted folders, and whether this PC's
+    # rclone already has a key that opens them. A failure to read PikPak is remote-failed, never a guess.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $names = Get-GuiKeyRemotes -Ctx $Ctx
+    $where = Join-RemotePath $names.Base @((Get-GuiMirrorRootName -Ctx $Ctx), $script:BackupPlainName)
+    $private = $names.Base + ':PC-Private'
+    if (Test-GuiPreview $Ctx) {
+        return @{ backup = $null; backupProblem = $null; encryptedData = $false; hasKey = $false
+            preview = @(("Would read your folder list backup ({0}) and check whether {1} holds encrypted folders and this PC's recovery key opens them." -f $where, $private)) }
+    }
+    $backup = $null; $problem = $null
+    $cat = Invoke-GuiRclone -RcloneArgs @('cat', $where)
+    if ($cat.ExitCode -eq 0) {
+        $doc = ConvertFrom-BackupText -Text (@($cat.Output) -join "`n") -Kind 'plain'
+        if ($doc.ContainsKey('Invalid')) { $problem = [string]$doc.Reason }
+        else {
+            $pairs = New-Object System.Collections.Generic.List[object]
+            foreach ($p in @($doc.Config['Pairs'])) {
+                if ($p -isnot [hashtable]) { continue }
+                $row = @{} + $p
+                $row['Resolved'] = Get-GuiRestorePathInfo -Path ([string]$p['Local'])
+                $pairs.Add($row)
+            }
+            $backup = @{ Config = $doc.Config; GlobalFilters = $doc.GlobalFilters; PrivatePaths = @(); Saved = $doc.Saved; PcName = $doc.PcName; Pairs = $pairs.ToArray() }
+        }
+    }
+    elseif ($cat.ExitCode -ne 3 -and $cat.ExitCode -ne 4) {
+        Write-GuiLog $Ctx.Config ('Reading the folder list backup failed (exit {0})' -f $cat.ExitCode)
+        throw (New-GuiException 'remote-failed' "Your folder list backup in PikPak couldn't be read. Check your internet connection and try again.")
+    }
+    $raw = Get-RemoteEntryCount -Target $private
+    if ($raw -lt 0) { throw (New-GuiException 'remote-failed' "PikPak couldn't be checked for encrypted folders. Check your internet connection and try again.") }
+    $state = Get-GuiExistingKeyState -Ctx $Ctx -RawCount $raw
+    if ($state -eq 'unchecked') { throw (New-GuiException 'remote-failed' "PikPak couldn't be checked for encrypted folders. Check your internet connection and try again.") }
+    @{ backup = $backup; backupProblem = $problem; encryptedData = ($raw -gt 0); hasKey = ($state -eq 'opens') }
+}
+
+function Invoke-GuiActionSetupScan {
+    # The synced folders found from their ID files in PikPak, as Pairs ready for the restore screen:
+    # @{ pairs = @(@{ Name; Local (the last path); Remote; Id; Priority; Resolved }) }.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $names = Get-GuiKeyRemotes -Ctx $Ctx
+    $root = Get-GuiMirrorRootName -Ctx $Ctx
+    if (Test-GuiPreview $Ctx) {
+        return @{ pairs = @(); preview = @(("Would look for the ID files of your synced folders in {0} and read each one." -f (Join-RemotePath $names.Base @($root)))) }
+    }
+    try { $found = @(Find-RemoteSyncedFolders -Remote $names.Base -MirrorRoot $root -Config $Ctx.Config) }
+    catch {
+        Write-GuiLog $Ctx.Config ('Looking for synced folders in PikPak failed: ' + $_.Exception.Message)
+        throw (New-GuiException 'remote-failed' "Your folders in PikPak couldn't be looked up. Check your internet connection and try again.")
+    }
+    $pairs = New-Object System.Collections.Generic.List[object]
+    foreach ($f in $found) {
+        $pairs.Add(@{ Name = $f.Name; Local = $f.LastPath; Remote = $f.Remote; Id = $f.Id; Priority = 3; Resolved = (Get-GuiRestorePathInfo -Path $f.LastPath) })
+    }
+    @{ pairs = $pairs.ToArray() }
+}
+
+function Invoke-GuiActionSetupSizes {
+    # @{ sizes = @{ <place> = <bytes or $null> } } from 'rclone size --json' for each place in args.places, which must
+    # be in the PikPak remote or the encrypted remote. A place PikPak cannot size gets $null.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $names = Get-GuiKeyRemotes -Ctx $Ctx
+    $places = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @(Get-GuiArg $Ctx 'places' @())) {
+        $t = [string]$p
+        $ok = ($p -is [string]) -and ($t.IndexOfAny([char[]]@([char]13, [char]10)) -lt 0) -and
+            ($t.StartsWith($names.Base + ':', [StringComparison]::Ordinal) -or $t.StartsWith($names.Private + ':', [StringComparison]::Ordinal))
+        if (-not $ok) { throw (New-GuiException 'bad-request' ("'{0}' isn't a place in PikPak." -f $t)) }
+        $places.Add($t)
+    }
+    if (Test-GuiPreview $Ctx) {
+        return @{ sizes = @{}; preview = @(('Would ask PikPak how much {0} folder(s) hold.' -f $places.Count)) }
+    }
+    $sizes = @{}
+    foreach ($t in $places) {
+        $bytes = $null
+        $r = Invoke-GuiRclone -RcloneArgs @('size', $t, '--json')
+        if ($r.ExitCode -eq 0) {
+            try { $bytes = [long]((@($r.Output) -join "`n" | ConvertFrom-Json -ErrorAction Stop).bytes) } catch { $bytes = $null }
+        }
+        $sizes[$t] = $bytes
+    }
+    @{ sizes = $sizes }
+}
+
+function Get-GuiRestoreArg {
+    # args.restore of setup.finish, checked: @{ settings; pairs; privatePaths; globalFilters; keySkipped } with
+    # hashtable rows, or $null when the setup chose folders instead.
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    $r = Get-GuiArg $Ctx 'restore' $null
+    if ($null -eq $r) { return $null }
+    if ($r -isnot [hashtable] -or $null -ne (Get-GuiArg $Ctx 'folders' $null)) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') }
+    $out = @{ settings = @{}; pairs = @(); privatePaths = @(); globalFilters = ''; keySkipped = ($r['keySkipped'] -eq $true) }
+    if ($null -ne $r['settings']) {
+        if ($r['settings'] -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The settings to restore are not valid.') }
+        $out.settings = $r['settings']
+    }
+    foreach ($k in @('pairs', 'privatePaths')) {
+        $rows = @(@($r[$k]) | Where-Object { $null -ne $_ })
+        foreach ($row in $rows) { if ($row -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') } }
+        $out[$k] = $rows
+    }
+    if ($r['globalFilters'] -is [string]) { $out.globalFilters = $r['globalFilters'] }
+    if ($out.pairs.Count + $out.privatePaths.Count -eq 0) { throw (New-GuiException 'bad-request' 'Choose at least one folder to sync.') }
+    if ($out.keySkipped -and $out.privatePaths.Count -gt 0) { throw (New-GuiException 'bad-request' 'Encrypted folders can only be restored with your recovery key.') }
+    $out
+}
+
+function New-GuiRestoreSetupConfig {
+    # The raw config of a restore: the backup's settings, the chosen folders as they were (Id, Remote, Name kept)
+    # and the preset's setup defaults for anything missing. When the key was skipped, a synced folder that holds
+    # encrypted folders is restored paused (PausedForKey says why), so it cannot upload them readable. The rclone
+    # remote names are this PC's: setup.signin made 'pikpak' and setup.usekey 'private'.
+    param(
+        [Parameter(Mandatory)][hashtable]$Restore,
+        [Parameter(Mandatory)][hashtable]$Preset,
+        [Parameter(Mandatory)][string]$DriveRoot,
+        [string]$Holding
+    )
+    $defaults = New-GuiSetupConfig -Folders @() -Preset $Preset -DriveRoot $DriveRoot -Holding $Holding
+    $pairs = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($p in @($Restore.pairs)) {
+        $row = @{} + $p
+        $row.Remove('Resolved')
+        if ($Restore.keySkipped -and $row['holdsEncrypted'] -eq $true) { $row['Paused'] = $true; $row['PausedForKey'] = $true }
+        $pairs.Add($row)
+    }
+    $priv = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($e in @($Restore.privatePaths)) { $priv.Add($e) }
+    $cfg = New-RestoreConfig -Settings $Restore.settings -Pairs $pairs.ToArray() -PrivatePaths $priv.ToArray() -Defaults $defaults `
+        -PathExists { param($p) Test-Path -LiteralPath $p }
+    $cfg['Remote'] = $defaults['Remote']
+    $cfg['PrivateRemote'] = $defaults['PrivateRemote']
+    $cfg
+}
+
+function Confirm-GuiRestoreKey {
+    # The recovery key step of a restore: the key was entered with setup.usekey, so the 'private' remote must be
+    # there. A new key is never made here.
+    param([switch]$WhatIf)
+    if ($WhatIf) { return "Would use the recovery key you entered (rclone remote 'private'); no new key is made." }
+    if (-not (Test-RemoteListed -Listing (Get-GuiRemoteList) -Name 'private')) {
+        throw "This PC has no recovery key yet (rclone remote 'private'). Go back and type your recovery key; nothing was saved."
+    }
+    'Recovery key from your earlier install is in use'
+}
+
+function Save-GuiRestoreFilters {
+    # Writes the backup's global filter rules to the config's filter file, UTF-8 without BOM. No rules in the backup
+    # leaves the file that is there.
+    param([Parameter(Mandatory)][hashtable]$Config, [AllowEmptyString()][string]$Text, [switch]$WhatIf)
+    $file = [string]$Config['GlobalFiltersFile']
+    if ([string]::IsNullOrEmpty($Text)) { return 'No filter rules in the backup; the filter file was left as it is.' }
+    if ($WhatIf) { return ('Would write your filter rules to {0}' -f $file) }
+    $dir = Split-Path -Path $file -Parent
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    [IO.File]::WriteAllText($file, $Text, (New-Object Text.UTF8Encoding $false))
+    ('Filter rules written to {0}' -f $file)
+}
+
+function Invoke-GuiRestoreBackupPush {
+    # The last step of a restore: the folder list is uploaded once. A failure is a quiet line, never a failed step.
+    param([Parameter(Mandatory)][string]$ConfigPath, [Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][datetime]$Now, [switch]$WhatIf)
+    if ($WhatIf) { return 'Would upload your folder list to PikPak.' }
+    $r = Publish-ConfigBackup -ConfigPath $ConfigPath -Config $Config -Now $Now -Force
+    if ($r.Error) { return "Your folder list couldn't be backed up to PikPak yet; the next sync tries again." }
+    'Folder list backed up to PikPak'
 }

@@ -527,3 +527,76 @@ Describe 'Publish-ConfigBackup' {
         $log | Should -Not -Match 'Photos'
     }
 }
+
+Describe 'Backup: Test-MirrorConfig PausedForKey' {
+    It 'Test-MirrorConfig rejects a non-bool PausedForKey' {
+        $base = @{
+            Remote = 'pikpak'; PrivateRemote = 'private'; MirrorRoot = 'PC-Mirror'; HoldingRoot = 'PC-Holding'
+            LocalHolding = 'D:\.pikpak-holding'; StateDir = 'C:\State\PikPakMirror'
+            HoldingDays = 30; MaxDeletePercent = 10; DailyBudgetGB = 8; MonthlyBudgetGB = 250; QuotaWarnPercent = 90
+            StaleRunDays = 3; LogKeepDays = 60; BwLimit = 'off'; PrivatePaths = @()
+        }
+        $bad = $base.Clone()
+        $bad.Pairs = @(@{ Name = 'Music'; Local = 'D:\Music'; Remote = 'D/Music'; Paused = $true; PausedForKey = 'yes' })
+        (@(Test-MirrorConfig -Config $bad) -join '|') | Should -Match "Pair 'Music' PausedForKey must be \`$true or \`$false\."
+        $good = $base.Clone()
+        $good.Pairs = @(@{ Name = 'Music'; Local = 'D:\Music'; Remote = 'D/Music'; Paused = $true; PausedForKey = $true })
+        @(Test-MirrorConfig -Config $good).Count | Should -Be 0
+    }
+}
+
+Describe 'Backup: Find-RemoteSyncedFolders' {
+    BeforeAll {
+        function script:New-MarkerJson {
+            param([string]$Id, [string]$Kind = 'synced', [string]$Name, [string]$LastPath)
+            (@{ app = 'pikpak-mirror'; version = 1; id = $Id; kind = $Kind; name = $Name; pikpak = 'x'; lastPath = $LastPath; updated = '2026-11-01' } | ConvertTo-Json)
+        }
+    }
+    BeforeEach {
+        $script:Listing = @()
+        $script:Markers = @{}
+        Mock Invoke-RcloneOutput { throw ('unexpected rclone call: ' + ($Arguments -join ' ')) }
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 0; Output = $script:Listing } } -ParameterFilter { $Arguments[0] -eq 'lsf' }
+        Mock Invoke-RcloneOutput {
+            $t = $script:Markers[[string]$Arguments[1]]
+            if ($null -eq $t) { return [pscustomobject]@{ ExitCode = 3; Output = @() } }
+            [pscustomobject]@{ ExitCode = 0; Output = @($t -split "`n") }
+        } -ParameterFilter { $Arguments[0] -eq 'cat' }
+    }
+
+    It 'lists the ID files with one rclone lsf and reads each top folder' {
+        $script:Listing = @('D/Music/.pikpak-sync.json', 'D/Music/Live/.pikpak-sync.json', 'C-Users/Docs/.pikpak-sync.json')
+        $script:Markers['pikpak:PC-Mirror/D/Music/.pikpak-sync.json'] = New-MarkerJson -Id '11111111-2222-3333-4444-555555555555' -Name 'Music' -LastPath 'D:\Music'
+        $script:Markers['pikpak:PC-Mirror/C-Users/Docs/.pikpak-sync.json'] = New-MarkerJson -Id '22222222-2222-3333-4444-555555555555' -Name 'Docs' -LastPath 'C:\Users\old\Docs'
+        $found = @(Find-RemoteSyncedFolders -Remote 'pikpak' -MirrorRoot 'PC-Mirror')
+        $found.Count | Should -Be 2
+        (@($found | ForEach-Object { $_.Remote }) -join ',') | Should -Be 'C-Users/Docs,D/Music'
+        $found[1].Id | Should -Be '11111111-2222-3333-4444-555555555555'
+        $found[1].Name | Should -Be 'Music'
+        $found[1].LastPath | Should -Be 'D:\Music'
+        Should -Invoke Invoke-RcloneOutput -Times 1 -Exactly -ParameterFilter { ($Arguments -join ' ') -eq 'lsf -R --files-only --include .pikpak-sync.json pikpak:PC-Mirror' }
+        Should -Invoke Invoke-RcloneOutput -Times 0 -Exactly -ParameterFilter { $Arguments[0] -eq 'cat' -and $Arguments[1] -like '*Live*' }
+    }
+
+    It 'skips and logs an ID file that is not of a synced folder or not valid' {
+        $state = Join-Path $TestDrive 'scan-state'
+        $script:Listing = @('D/Enc/.pikpak-sync.json', 'D/Bad/.pikpak-sync.json', 'D/Gone/.pikpak-sync.json', '.pikpak-sync.json')
+        $script:Markers['pikpak:PC-Mirror/D/Enc/.pikpak-sync.json'] = New-MarkerJson -Id '33333333-2222-3333-4444-555555555555' -Kind 'encrypted' -Name 'Enc' -LastPath 'D:\Enc'
+        $script:Markers['pikpak:PC-Mirror/D/Bad/.pikpak-sync.json'] = 'not json'
+        $found = @(Find-RemoteSyncedFolders -Remote 'pikpak' -MirrorRoot 'PC-Mirror' -Config @{ StateDir = $state })
+        $found.Count | Should -Be 0
+        $log = (Get-ChildItem -LiteralPath (Join-Path $state 'logs') -File | Get-Content -Raw) -join ''
+        $log | Should -Match 'D/Enc'
+        $log | Should -Match 'D/Bad'
+    }
+
+    It 'throws when PikPak cannot be listed or an ID file cannot be read, and finds nothing in a missing folder' {
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 1; Output = @() } } -ParameterFilter { $Arguments[0] -eq 'lsf' }
+        { Find-RemoteSyncedFolders -Remote 'pikpak' -MirrorRoot 'PC-Mirror' } | Should -Throw
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 3; Output = @() } } -ParameterFilter { $Arguments[0] -eq 'lsf' }
+        @(Find-RemoteSyncedFolders -Remote 'pikpak' -MirrorRoot 'PC-Mirror').Count | Should -Be 0
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 0; Output = @('D/Music/.pikpak-sync.json') } } -ParameterFilter { $Arguments[0] -eq 'lsf' }
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 1; Output = @() } } -ParameterFilter { $Arguments[0] -eq 'cat' }
+        { Find-RemoteSyncedFolders -Remote 'pikpak' -MirrorRoot 'PC-Mirror' } | Should -Throw
+    }
+}

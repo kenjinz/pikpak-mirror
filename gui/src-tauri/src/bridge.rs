@@ -93,7 +93,9 @@ fn clip(text: &str) -> String {
 pub fn action_timeout(action: &str, args: &Value) -> Duration {
     match action {
         "setup.signin" | "setup.finish" => Duration::from_secs(30 * 60),
-        "private.remoteList" | "private.deleteRemote" | "folders.locate" => Duration::from_secs(300),
+        "private.remoteList" | "private.deleteRemote" | "folders.locate" | "setup.scan" | "setup.sizes" => {
+            Duration::from_secs(300)
+        }
         "folders.size" => {
             let max = args["maxSeconds"]
                 .as_f64()
@@ -130,6 +132,9 @@ pub fn is_write_action(action: &str) -> bool {
             | "folders.newId"
             | "private.download"
             | "private.deleteRemote"
+            | "setup.usekey"
+            | "private.usekey"
+            | "private.restore"
     )
 }
 
@@ -461,6 +466,9 @@ mod tests {
         assert_eq!(action_timeout("private.remoteList", &none), Duration::from_secs(300));
         assert_eq!(action_timeout("private.deleteRemote", &none), Duration::from_secs(300));
         assert_eq!(action_timeout("folders.locate", &none), Duration::from_secs(300));
+        assert_eq!(action_timeout("setup.scan", &none), Duration::from_secs(300));
+        assert_eq!(action_timeout("setup.sizes", &none), Duration::from_secs(300));
+        assert_eq!(action_timeout("setup.discover", &none), Duration::from_secs(120));
     }
 
     #[test]
@@ -486,6 +494,9 @@ mod tests {
             "folders.newId",
             "private.download",
             "private.deleteRemote",
+            "setup.usekey",
+            "private.usekey",
+            "private.restore",
         ] {
             assert!(is_write_action(a), "{a} is a write action");
         }
@@ -507,6 +518,10 @@ mod tests {
             "folders.locateReview",
             "private.remoteList",
             "private.pikpakNames",
+            "setup.discover",
+            "setup.scan",
+            "setup.sizes",
+            "backup.push",
         ] {
             assert!(!is_write_action(a), "{a} is not a write action");
         }

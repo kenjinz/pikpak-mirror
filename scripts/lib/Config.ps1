@@ -182,6 +182,7 @@ function Test-MirrorConfig {
 
         if ($pair.ContainsKey('Id') -and -not (Test-FolderId ([string]$pair['Id']))) { $errors.Add("$label has an invalid Id '$($pair['Id'])'.") }
         if ($pair.ContainsKey('Paused') -and $pair['Paused'] -isnot [bool]) { $errors.Add("$label Paused must be `$true or `$false.") }
+        if ($pair.ContainsKey('PausedForKey') -and $pair['PausedForKey'] -isnot [bool]) { $errors.Add("$label PausedForKey must be `$true or `$false.") }
 
         $v = [string]$pair.Local
         if (-not [string]::IsNullOrWhiteSpace($v) -and ($v -notmatch '^[A-Za-z]:\\' -or $v.Contains('%'))) {

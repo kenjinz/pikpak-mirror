@@ -440,3 +440,58 @@ function Publish-ConfigBackup {
     }
     $result
 }
+
+# ===== Finding synced folders from their ID files ===================================================
+
+function Find-RemoteSyncedFolders {
+    # The synced folders under <Remote>:<MirrorRoot> found from their ID files (used when there is no backup):
+    # @{ Id; Name; Remote; LastPath } items sorted by Remote (wrap in @()). One 'rclone lsf -R' lists every ID file,
+    # then each folder top is read with 'rclone cat'. An ID file below a found folder is not read (only folder tops have one). One
+    # that is not of a synced folder, or not valid, is skipped and logged (when -Config gives a log). Throws when
+    # PikPak cannot be listed or an ID file cannot be read: "no folders there" must never be a guess.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Remote,
+        [Parameter(Mandatory)][string]$MirrorRoot,
+        $Config
+    )
+
+    $marker = Get-FolderMarkerName -Kind 'pair'
+    $root = Join-RemotePath $Remote @($MirrorRoot)
+    $log = {
+        param([string]$Message)
+        if ($null -ne $Config) { try { Write-MirrorLog -Config $Config -Message ('Folder scan: ' + $Message) } catch { } }
+    }
+    $list = Invoke-RcloneOutput -Arguments ([string[]]@('lsf', '-R', '--files-only', '--include', $marker, $root))
+    if ($list.ExitCode -eq 3) { return }
+    if ($list.ExitCode -ne 0) { throw ('rclone could not list the ID files in {0} (exit code {1}).' -f $root, $list.ExitCode) }
+
+    $dirs = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($list.Output)) {
+        $f = ([string]$line).Trim()
+        if ($f -ceq $marker) { & $log ('an ID file at the top of {0} was skipped' -f $root); continue }
+        if (-not $f.EndsWith('/' + $marker, [StringComparison]::Ordinal)) { continue }
+        $dirs.Add($f.Substring(0, $f.Length - $marker.Length - 1))
+    }
+    # Shallow folders first, so a nested ID file is dropped before anything reads it.
+    $ordered = @($dirs | Sort-Object -Property @{ Expression = { @($_.Split('/')).Count } }, @{ Expression = { $_ } })
+
+    $found = New-Object System.Collections.Generic.List[object]
+    foreach ($d in $ordered) {
+        $nested = $false
+        foreach ($k in $found) { if ($d.StartsWith($k.Remote + '/', [StringComparison]::OrdinalIgnoreCase)) { $nested = $true; break } }
+        if ($nested) { continue }
+        $r = Invoke-RcloneOutput -Arguments ([string[]]@('cat', ($root.TrimEnd('/') + '/' + $d + '/' + $marker)))
+        $res = ConvertTo-RemoteMarkerResult -Result $r
+        if ($res.Failed) { throw ('rclone could not read the ID file of {0} (exit code {1}).' -f $d, $r.ExitCode) }
+        if (-not $res.Found) { continue }
+        if ($res.Marker.ContainsKey('Invalid')) { & $log ('the ID file of {0} is not valid and was skipped' -f $d); continue }
+        if ([string]$res.Marker.Kind -cne 'synced') { & $log ('the ID file of {0} is not of a synced folder and was skipped' -f $d); continue }
+        $name = [string]$res.Marker.Name
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = @($d.Split('/'))[-1] }
+        $last = $null
+        if (-not [string]::IsNullOrWhiteSpace([string]$res.Marker.LastPath)) { $last = [string]$res.Marker.LastPath }
+        $found.Add(@{ Id = [string]$res.Marker.Id; Name = $name; Remote = $d; LastPath = $last })
+    }
+    $found | Sort-Object -Property @{ Expression = { $_.Remote } }
+}

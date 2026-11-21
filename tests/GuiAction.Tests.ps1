@@ -2759,6 +2759,16 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             Should -Invoke Invoke-GuiRclone -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
             Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
         }
+        It 'setup.usekey says try again when an existing private remote cannot be listed' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 1 -Errors @('connection reset') } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'private:' -and $RcloneArgs[2] -eq '--dirs-only' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'remote-failed'
+            $r.error.message | Should -Match 'try again'
+            $r.error.message | Should -Not -Match 'different recovery key'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
     }
 
     Context 'the folders found' {
@@ -2802,6 +2812,16 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
             $r.data.source | Should -Be 'idfiles'
             @($r.data.folders).Count | Should -Be 1
+        }
+
+        It 'falls back to the ID files when the companion file lists no encrypted folder' {
+            $docs = ConvertTo-BackupDocuments -RawConfig @{ Pairs = @(); PrivatePaths = @() } -Now ([datetime]'2026-11-01T10:00:00') -PcName 'OLD-PC'
+            $script:KeyFiles = $docs.Encrypted
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @($script:KeyFiles -split "`n") } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'private:.pikpak-sync-encrypted.json' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.source | Should -Be 'idfiles'
+            (@(@($r.data.folders) | ForEach-Object { $_.name }) -join ',') | Should -Be 'Photos'
         }
 
         It 'a folder list that cannot be listed is remote-failed' {
@@ -2879,6 +2899,316 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             $script:KeyDirs = @('_holding/')
             $script:DecEntries = @('.pikpak-sync-encrypted.json')
             Test-GuiExistingKeyOpens -Ctx @{ Config = $null } | Should -BeTrue
+        }
+    }
+}
+
+Describe 'Invoke-GuiRequest: restore from the backup' {
+    BeforeAll {
+        $script:Gid1 = '11111111-aaaa-4bbb-8ccc-000000000001'
+        $script:Gid2 = '11111111-aaaa-4bbb-8ccc-000000000002'
+        $script:Gid3 = '11111111-aaaa-4bbb-8ccc-000000000003'
+        function script:Get-MissingDrive {
+            foreach ($l in [char[]]'ZYXWVUTSRQPONMLKJIHG') { if (-not (Test-Path -LiteralPath ([string]$l + ':\'))) { return [string]$l } }
+            throw 'no free drive letter for the test'
+        }
+        function script:New-MarkerJson {
+            param([string]$Id, [string]$Kind = 'synced', [string]$Name, [string]$LastPath)
+            (@{ app = 'pikpak-mirror'; version = 1; id = $Id; kind = $Kind; name = $Name; pikpak = 'x'; lastPath = $LastPath; updated = '2026-11-01' } | ConvertTo-Json)
+        }
+        function script:New-RestoreCase {
+            # A fresh place for a restored install: two synced folders (Docs holds an encrypted folder) and the
+            # backup's settings, plus one encrypted folder (Vault) when -WithKey.
+            param([switch]$WithKey, [switch]$KeySkipped)
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $docs = Join-Path $root 'Docs'; $music = Join-Path $root 'Music'; $vault = Join-Path $root 'Docs\Vault'
+            New-Item -ItemType Directory -Path $docs, $music -Force | Out-Null
+            $settings = @{
+                Remote = 'pikpak'; PrivateRemote = 'private'; MirrorRoot = 'PC-Mirror'; HoldingRoot = 'PC-Holding'
+                LocalHolding = (Join-Path $root 'holding'); StateDir = (Join-Path $root 'state'); GlobalFiltersFile = 'filters.txt'
+                HoldingDays = 45; MaxDeletePercent = 10; DailyBudgetGB = 2; MonthlyBudgetGB = 40; QuotaWarnPercent = 90
+                StaleRunDays = 3; LogKeepDays = 60; BwLimit = ''; SyncTime = '21:00'; SyncIntervalMinutes = 180; SyncAtLogon = $false
+                Pairs = @(@{ Name = 'ignored'; Local = 'D:\ignored'; Remote = 'D/ignored' })
+            }
+            $pairs = @(
+                @{ Name = 'Docs'; Local = $docs; Remote = 'OLD/Docs-place'; Priority = 1; Id = $script:Gid1; holdsEncrypted = $true
+                    Resolved = @{ Path = $docs; Moved = $false; DriveMissing = $false } }
+                @{ Name = 'Music'; Local = $music; Remote = 'D/Music'; Priority = 3; Id = $script:Gid2; Paused = $true }
+            )
+            $priv = @()
+            if ($WithKey) { $priv = @(@{ Path = $vault; Name = 'Vault'; Id = $script:Gid3 }) }
+            $restore = @{ settings = $settings; pairs = $pairs; privatePaths = $priv; globalFilters = "- *.tmp`n- Thumbs.db`n"; keySkipped = [bool]$KeySkipped }
+            [pscustomobject]@{ Root = $root; Docs = $docs; Music = $music; Vault = $vault; Restore = $restore
+                ConfigPath = (Join-Path $root 'config\mirror.config.psd1'); StateDir = (Join-Path $root 'state') }
+        }
+    }
+    BeforeEach {
+        Mock Invoke-GuiRclone { throw ('unexpected rclone call: ' + ($RcloneArgs -join ' ')) }
+        Mock Invoke-RcloneOutput { throw ('unexpected rclone call: ' + ($Arguments -join ' ')) }
+        Mock Invoke-RcloneCaptured { throw ('unexpected rclone call: ' + ($RcloneArgs -join ' ')) }
+        Mock Test-RcloneInstalled { $true }
+        Mock Test-SyncRunning { $false }
+        Mock Register-MirrorTasks { throw 'tasks in unit test' }
+        Mock New-MirrorPrivateRemote { throw 'remote in unit test' }
+        Mock New-MirrorPikPakRemote { throw 'remote in unit test' }
+        Mock Install-MirrorRclone { throw 'install in unit test' }
+        Mock Start-GuiDetached { throw 'process start in unit test' }
+        Mock Publish-ConfigBackup { throw 'backup upload in unit test' }
+        $script:NoCfg = Join-Path $TestDrive 'none\mirror.config.psd1'
+        $script:Remotes = @('pikpak:')
+        $script:RawEntries = @()
+        Mock Invoke-GuiRclone { New-RcloneResult -Output $script:Remotes } -ParameterFilter { $RcloneArgs[0] -eq 'listremotes' }
+        Mock Invoke-RcloneCaptured { New-RcloneResult -Output $script:RawEntries } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'pikpak:PC-Private' }
+    }
+
+    Context 'setup.discover' {
+        It 'discover returns the parsed backup and encryptedData' {
+            $gone = 'zz-gone-user-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+            $missing = Get-MissingDrive
+            $raw = @{
+                Remote = 'pikpak'; MirrorRoot = 'PC-Mirror'; DailyBudgetGB = 2; SyncTime = '21:00'
+                Pairs = @(
+                    @{ Name = 'Documents'; Local = ('C:\Users\' + $gone + '\Documents'); Remote = 'C-Users/Documents'; Priority = 1; Id = $script:Gid1 }
+                    @{ Name = 'Old'; Local = ($missing + ':\Old'); Remote = ($missing + '/Old'); Priority = 3; Id = $script:Gid2 }
+                )
+                PrivatePaths = @(@{ Path = ('C:\Users\' + $gone + '\Documents\SecretStuff'); Name = 'SecretStuff' })
+            }
+            $docs = ConvertTo-BackupDocuments -RawConfig $raw -GlobalFilters '- *.bak' -Now ([datetime]'2026-11-20T09:00:00Z').ToUniversalTime() -PcName 'OLD-PC'
+            $script:PlainText = $docs.Plain
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @($script:PlainText -split "`n") } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'pikpak:PC-Mirror/.pikpak-sync-backup.json' }
+            $script:RawEntries = @('x1/')
+            $r = Invoke-Req (New-Req 'setup.discover') $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.encryptedData | Should -BeTrue
+            $r.data.hasKey | Should -BeFalse
+            $r.data.backupProblem | Should -BeNullOrEmpty
+            $b = $r.data.backup
+            $b.PcName | Should -Be 'OLD-PC'
+            $b.Saved | Should -Not -BeNullOrEmpty
+            $b.GlobalFilters | Should -Be '- *.bak'
+            $b.Config.DailyBudgetGB | Should -Be 2
+            $p = @($b.Pairs)
+            $p.Count | Should -Be 2
+            $p[0].Id | Should -Be $script:Gid1
+            $p[0].Remote | Should -Be 'C-Users/Documents'
+            $p[0].holdsEncrypted | Should -BeTrue
+            $p[0].Resolved.Path | Should -Be ($env:USERPROFILE.TrimEnd('\') + '\Documents')
+            $p[0].Resolved.Moved | Should -BeTrue
+            $p[0].Resolved.DriveMissing | Should -BeFalse
+            $p[1].Resolved.DriveMissing | Should -BeTrue
+            ($r | ConvertTo-Json -Depth 10) | Should -Not -Match 'SecretStuff'
+        }
+
+        It 'discover reports a broken backup as backupProblem and backup null' {
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @('this is not json') } -ParameterFilter { $RcloneArgs[0] -eq 'cat' }
+            $r = Invoke-Req (New-Req 'setup.discover') $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.backup | Should -BeNullOrEmpty
+            $r.data.backupProblem | Should -Be 'The backup file is not valid JSON.'
+            $r.data.encryptedData | Should -BeFalse
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 3 } -ParameterFilter { $RcloneArgs[0] -eq 'cat' }
+            $r2 = Invoke-Req (New-Req 'setup.discover') $script:NoCfg
+            $r2.ok | Should -BeTrue
+            $r2.data.backup | Should -BeNullOrEmpty
+            $r2.data.backupProblem | Should -BeNullOrEmpty
+        }
+
+        It 'discover says try again when PikPak cannot be read' {
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 3 } -ParameterFilter { $RcloneArgs[0] -eq 'cat' }
+            Mock Invoke-RcloneCaptured { New-RcloneResult -ExitCode 1 } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'pikpak:PC-Private' }
+            (Invoke-Req (New-Req 'setup.discover') $script:NoCfg).error.code | Should -Be 'remote-failed'
+            Mock Invoke-RcloneCaptured { New-RcloneResult -Output @() } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'pikpak:PC-Private' }
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 1 } -ParameterFilter { $RcloneArgs[0] -eq 'cat' }
+            (Invoke-Req (New-Req 'setup.discover') $script:NoCfg).error.code | Should -Be 'remote-failed'
+        }
+
+        It 'discover reports hasKey when this PC already has a key that opens the data' {
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 3 } -ParameterFilter { $RcloneArgs[0] -eq 'cat' }
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @('Photos/') } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'private:' -and $RcloneArgs[2] -eq '--dirs-only' }
+            $script:Remotes = @('pikpak:', 'private:')
+            $script:RawEntries = @('x1/')
+            $r = Invoke-Req (New-Req 'setup.discover') $script:NoCfg
+            $r.data.encryptedData | Should -BeTrue
+            $r.data.hasKey | Should -BeTrue
+        }
+
+        It 'discover in preview reads nothing' {
+            $r = Invoke-Req (New-Req 'setup.discover' -Preview) $script:NoCfg
+            $r.ok | Should -BeTrue
+            @($r.data.preview).Count | Should -BeGreaterThan 0
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly
+        }
+    }
+
+    Context 'setup.scan and setup.sizes' {
+        It 'scan finds synced folders from ID files and drops nested ones' {
+            $gone = 'zz-gone-user-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+            $script:Listing = @('D/Music/.pikpak-sync.json', 'C-Users/Documents/.pikpak-sync.json', 'C-Users/Documents/Sub/.pikpak-sync.json', 'D/Bad/.pikpak-sync.json', 'D/Enc/.pikpak-sync.json')
+            $script:Markers = @{
+                'pikpak:PC-Mirror/D/Music/.pikpak-sync.json'               = (New-MarkerJson -Id $script:Gid2 -Name 'Music' -LastPath 'D:\Music')
+                'pikpak:PC-Mirror/C-Users/Documents/.pikpak-sync.json'     = (New-MarkerJson -Id $script:Gid1 -Name 'Documents' -LastPath ('C:\Users\' + $gone + '\Documents'))
+                'pikpak:PC-Mirror/C-Users/Documents/Sub/.pikpak-sync.json' = (New-MarkerJson -Id $script:Gid3 -Name 'Sub' -LastPath 'C:\x\Sub')
+                'pikpak:PC-Mirror/D/Bad/.pikpak-sync.json'                 = 'not json'
+                'pikpak:PC-Mirror/D/Enc/.pikpak-sync.json'                 = (New-MarkerJson -Id $script:Gid3 -Kind 'encrypted' -Name 'Enc' -LastPath 'D:\Enc')
+            }
+            Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 0; Output = $script:Listing } } -ParameterFilter { $Arguments[0] -eq 'lsf' }
+            Mock Invoke-RcloneOutput {
+                $t = $script:Markers[[string]$Arguments[1]]
+                [pscustomobject]@{ ExitCode = 0; Output = @($t -split "`n") }
+            } -ParameterFilter { $Arguments[0] -eq 'cat' }
+            $r = Invoke-Req (New-Req 'setup.scan') $script:NoCfg
+            $r.ok | Should -BeTrue
+            $p = @($r.data.pairs)
+            (@($p | ForEach-Object { $_.Name }) -join ',') | Should -Be 'Documents,Music'
+            $p[0].Remote | Should -Be 'C-Users/Documents'
+            $p[0].Id | Should -Be $script:Gid1
+            $p[0].Priority | Should -Be 3
+            $p[0].Local | Should -Be ('C:\Users\' + $gone + '\Documents')
+            $p[0].Resolved.Path | Should -Be ($env:USERPROFILE.TrimEnd('\') + '\Documents')
+            $p[0].Resolved.Moved | Should -BeTrue
+            $p[1].Local | Should -Be 'D:\Music'
+            Should -Invoke Invoke-RcloneOutput -Times 0 -Exactly -ParameterFilter { $Arguments[0] -eq 'cat' -and $Arguments[1] -like '*/Sub/*' }
+        }
+
+        It 'scan reports a listing failure as remote-failed and in preview reads nothing' {
+            Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 1; Output = @() } } -ParameterFilter { $Arguments[0] -eq 'lsf' }
+            (Invoke-Req (New-Req 'setup.scan') $script:NoCfg).error.code | Should -Be 'remote-failed'
+            $pv = Invoke-Req (New-Req 'setup.scan' -Preview) $script:NoCfg
+            $pv.ok | Should -BeTrue
+            @($pv.data.preview).Count | Should -BeGreaterThan 0
+            Should -Invoke Invoke-RcloneOutput -Times 1 -Exactly
+        }
+
+        It 'sizes returns bytes per place and null when PikPak cannot size one' {
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @('{"count":3,"bytes":2048,"sizeless":0}') } -ParameterFilter { $RcloneArgs[0] -eq 'size' -and $RcloneArgs[1] -eq 'pikpak:PC-Mirror/D/Music' -and $RcloneArgs[2] -eq '--json' }
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 1 } -ParameterFilter { $RcloneArgs[0] -eq 'size' -and $RcloneArgs[1] -eq 'private:Vault' }
+            $r = Invoke-Req (New-Req 'setup.sizes' @{ places = @('pikpak:PC-Mirror/D/Music', 'private:Vault') }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.sizes['pikpak:PC-Mirror/D/Music'] | Should -Be 2048
+            $r.data.sizes.ContainsKey('private:Vault') | Should -BeTrue
+            $r.data.sizes['private:Vault'] | Should -BeNullOrEmpty
+        }
+
+        It 'sizes refuses a place outside PikPak and in preview sizes nothing' {
+            foreach ($bad in @('C:\Windows', '--config=x', 'other:thing')) {
+                (Invoke-Req (New-Req 'setup.sizes' @{ places = @($bad) }) $script:NoCfg).error.code | Should -Be 'bad-request'
+            }
+            $pv = Invoke-Req (New-Req 'setup.sizes' @{ places = @('pikpak:PC-Mirror/D/Music') } -Preview) $script:NoCfg
+            $pv.ok | Should -BeTrue
+            @($pv.data.preview).Count | Should -BeGreaterThan 0
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'size' }
+        }
+    }
+
+    Context 'setup.finish with restore' {
+        BeforeEach {
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @('{"total":6442450944,"used":0}') } -ParameterFilter { $RcloneArgs[0] -eq 'about' }
+            Mock Register-MirrorTasks { New-StepResult 'registered' }
+            Mock New-MirrorLocalFolders { New-StepResult 'folders' }
+            Mock Publish-ConfigBackup { @{ Uploaded = $true; Skipped = $false; Error = $null } }
+            Mock Get-GuiBestDrive { $TestDrive + '\' }
+        }
+
+        It 'finish with restore keeps Id, Remote and Name and writes filters.txt' {
+            $c = New-RestoreCase -WithKey
+            $script:Remotes = @('pikpak:', 'private:')
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.complete | Should -BeTrue
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Recovery key,Settings,Filters,Scheduled syncing,Local folders,Encrypted folders confirmed,Folder list backup'
+            @($r.data.steps)[2].message | Should -Be 'Recovery key from your earlier install is in use'
+            $raw = Get-RawMirrorConfig -Path $c.ConfigPath
+            $p = @($raw.Pairs)
+            $p.Count | Should -Be 2
+            $p[0].Name | Should -Be 'Docs'
+            $p[0].Id | Should -Be $script:Gid1
+            $p[0].Remote | Should -Be 'OLD/Docs-place'
+            $p[0].Local | Should -Be $c.Docs
+            foreach ($k in 'holdsEncrypted', 'Resolved') { $p[0].ContainsKey($k) | Should -BeFalse -Because $k }
+            $p[1].Paused | Should -BeTrue
+            $p[1].ContainsKey('PausedForKey') | Should -BeFalse
+            @($raw.PrivatePaths).Count | Should -Be 1
+            @($raw.PrivatePaths)[0].Name | Should -Be 'Vault'
+            @($raw.PrivatePaths)[0].Id | Should -Be $script:Gid3
+            $raw.HoldingDays | Should -Be 45
+            $raw.SyncTime | Should -Be '21:00'
+            $raw.SyncAtLogon | Should -BeFalse
+            $filters = Join-Path (Split-Path -Path $c.ConfigPath -Parent) 'filters.txt'
+            $bytes = [IO.File]::ReadAllBytes($filters)
+            ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) | Should -BeFalse
+            [IO.File]::ReadAllText($filters) | Should -BeExactly "- *.tmp`n- Thumbs.db`n"
+            Should -Invoke Publish-ConfigBackup -Times 1 -Exactly -ParameterFilter { $Force -and $ConfigPath -eq ([IO.Path]::GetFullPath($c.ConfigPath)) }
+        }
+
+        It 'finish with restore pauses pairs that hold encrypted folders when the key was skipped' {
+            $c = New-RestoreCase -KeySkipped
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            (@($r.data.steps) | ForEach-Object { $_.name }) -notcontains 'Recovery key' | Should -BeTrue
+            $p = @((Get-RawMirrorConfig -Path $c.ConfigPath).Pairs)
+            $p[0].Name | Should -Be 'Docs'
+            $p[0].Paused | Should -BeTrue
+            $p[0].PausedForKey | Should -BeTrue
+            $p[1].Paused | Should -BeTrue
+            $p[1].ContainsKey('PausedForKey') | Should -BeFalse
+            @((Get-RawMirrorConfig -Path $c.ConfigPath).PrivatePaths).Count | Should -Be 0
+        }
+
+        It 'finish with restore and the key does not pause them' {
+            $c = New-RestoreCase -WithKey
+            $script:Remotes = @('pikpak:', 'private:')
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            $p = @((Get-RawMirrorConfig -Path $c.ConfigPath).Pairs)
+            ($p[0].Paused -eq $true) | Should -BeFalse
+            $p[0].ContainsKey('PausedForKey') | Should -BeFalse
+        }
+
+        It 'finish with restore does not make a new key' {
+            $c = New-RestoreCase -WithKey
+            $script:Remotes = @('pikpak:')
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeFalse
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Recovery key'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Test-Path -LiteralPath $c.ConfigPath | Should -BeFalse
+            Should -Invoke Publish-ConfigBackup -Times 0 -Exactly
+        }
+
+        It 'finish with restore under preview writes nothing' {
+            $c = New-RestoreCase -WithKey
+            Mock Save-MirrorConfig { throw 'must not save' }
+            Mock Save-PrivateConfirmation { throw 'must not confirm' }
+            Mock Publish-ConfigBackup { throw 'must not upload' }
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore } -Preview) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.complete | Should -BeFalse
+            @($r.data.preview).Count | Should -BeGreaterThan 5
+            Test-Path -LiteralPath $c.ConfigPath | Should -BeFalse
+            Test-Path -LiteralPath (Join-Path (Split-Path -Path $c.ConfigPath -Parent) 'filters.txt') | Should -BeFalse
+            Should -Invoke Save-MirrorConfig -Times 0 -Exactly
+            Should -Invoke Publish-ConfigBackup -Times 0 -Exactly
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Should -Invoke Register-MirrorTasks -Times 1 -Exactly -ParameterFilter { $WhatIf -eq $true }
+            Should -Invoke New-MirrorLocalFolders -Times 1 -Exactly -ParameterFilter { $WhatIf -eq $true }
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly
+        }
+
+        It 'finish with restore: a failed backup upload is a quiet line, not a failed step' {
+            $c = New-RestoreCase -KeySkipped
+            Mock Publish-ConfigBackup { @{ Uploaded = $false; Skipped = $false; Error = 'rclone could not upload the folder list (exit code 1).' } }
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            @($r.data.steps)[-1].name | Should -Be 'Folder list backup'
+            @($r.data.steps)[-1].done | Should -BeTrue
+            @($r.data.steps)[-1].message | Should -Match 'next sync'
+        }
+
+        It 'finish with restore needs at least one folder' {
+            $c = New-RestoreCase -KeySkipped
+            $c.Restore.pairs = @()
+            (Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath).error.code | Should -Be 'bad-request'
         }
     }
 }

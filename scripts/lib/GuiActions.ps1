@@ -429,6 +429,9 @@ function Invoke-GuiRequest {
             'setup.finish' { $fn = 'Invoke-GuiActionSetupFinish'; $needsConfig = $false }
             'setup.newkey' { $fn = 'Invoke-GuiActionSetupNewkey'; $needsConfig = $false }
             'setup.usekey' { $fn = 'Invoke-GuiActionSetupUsekey'; $needsConfig = $false }
+            'setup.discover' { $fn = 'Invoke-GuiActionSetupDiscover'; $needsConfig = $false }
+            'setup.scan' { $fn = 'Invoke-GuiActionSetupScan'; $needsConfig = $false }
+            'setup.sizes' { $fn = 'Invoke-GuiActionSetupSizes'; $needsConfig = $false }
             default { throw (New-GuiException 'bad-request' ("Unknown action '{0}'." -f $ctx.Action)) }
         }
 
@@ -2168,7 +2171,7 @@ function Invoke-GuiActionSetupSignin {
 function New-GuiSetupConfig {
     # A new raw config from the shipped defaults, the chosen folders and the budget preset.
     param(
-        [Parameter(Mandatory)][object[]]$Folders,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Folders,
         [Parameter(Mandatory)][hashtable]$Preset,
         [Parameter(Mandatory)][string]$DriveRoot,
         [string]$Holding
@@ -2206,7 +2209,8 @@ function Invoke-GuiActionSetupFinish {
     # When the config already exists, a real run is refused unless args.resume = true: then the config
     # write is skipped and the remaining idempotent steps (tasks, local folders, private
     # confirmation) run again with the existing config. Under preview every step runs with -WhatIf
-    # and nothing is written or registered.
+    # and nothing is written or registered. args.restore (instead of folders) restores the folders and
+    # settings of an earlier install (GuiBackup.ps1): no new key, the backup's filter rules, one backup push.
     param([Parameter(Mandatory)][hashtable]$Ctx)
     $isPreview = Test-GuiPreview $Ctx
     $resume = $false
@@ -2257,13 +2261,14 @@ function Invoke-GuiActionSetupFinish {
         return @{ steps = $steps.ToArray(); complete = (-not $state.Failed) }
     }
 
+    $restore = Get-GuiRestoreArg -Ctx $Ctx
     $folders = @()
     foreach ($f in @(Get-GuiArg $Ctx 'folders' @())) {
         if ($f -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') }
         $p = Get-GuiPathArg -Ctx @{ Args = $f } -Name 'path'
         $folders += [pscustomobject]@{ Path = $p; Private = [bool]$f['private'] }
     }
-    if ($folders.Count -eq 0) { throw (New-GuiException 'bad-request' 'Choose at least one folder to sync.') }
+    if ($folders.Count -eq 0 -and $null -eq $restore) { throw (New-GuiException 'bad-request' 'Choose at least one folder to sync.') }
     $anyPrivate = (@($folders | Where-Object { $_.Private }).Count -gt 0)
     if ($anyPrivate) {
         $key = ConvertTo-RecoveryKey -Text ([string](Get-GuiArg $Ctx 'recoveryKey' ''))
@@ -2293,8 +2298,14 @@ function Invoke-GuiActionSetupFinish {
         }
         # 2. The new settings validate (nothing written yet).
         & $run 'Settings check' {
-            $raw = New-GuiSetupConfig -Folders $folders -Preset $state.Preset -DriveRoot (Get-GuiBestDrive) `
-                -Holding ([string](Get-GuiArg $Ctx 'holding' ''))
+            if ($null -ne $restore) {
+                $raw = New-GuiRestoreSetupConfig -Restore $restore -Preset $state.Preset -DriveRoot (Get-GuiBestDrive) `
+                    -Holding ([string](Get-GuiArg $Ctx 'holding' ''))
+            }
+            else {
+                $raw = New-GuiSetupConfig -Folders $folders -Preset $state.Preset -DriveRoot (Get-GuiBestDrive) `
+                    -Holding ([string](Get-GuiArg $Ctx 'holding' ''))
+            }
             $check = Test-GuiConfigCandidate -Config $raw -NextTo $cfgFull
             if (@($check.Errors).Count -gt 0) { throw (@($check.Errors) -join ' ') }
             $state.Raw = $raw
@@ -2314,6 +2325,9 @@ function Invoke-GuiActionSetupFinish {
                 New-MirrorPrivateRemote -Name 'private' -BaseRemote 'pikpak' -Password $key -Mode New -WhatIf:$isPreview
             }
         }
+        if ($null -ne $restore -and @($restore.privatePaths).Count -gt 0) {
+            & $run 'Recovery key' { Confirm-GuiRestoreKey -WhatIf:$isPreview }
+        }
         # 4. Only now the config file.
         & $run 'Settings' {
             if ($isPreview) { return ('Would write {0}' -f $cfgFull) }
@@ -2324,7 +2338,11 @@ function Invoke-GuiActionSetupFinish {
             $state.Config = Get-MirrorConfig -Path $cfgFull
             ('Settings saved to {0}' -f $cfgFull)
         }
+        if ($null -ne $restore) { & $run 'Filters' { Save-GuiRestoreFilters -Config $state.Config -Text $restore.globalFilters -WhatIf:$isPreview } }
         & $installSteps
+        if ($null -ne $restore) {
+            & $run 'Folder list backup' { Invoke-GuiRestoreBackupPush -ConfigPath $cfgFull -Config $state.Config -Now $Ctx.Now -WhatIf:$isPreview }
+        }
     }
     finally { $key = $null }
     $res = @{ steps = $steps.ToArray(); complete = (-not $state.Failed) -and (-not $isPreview) }
