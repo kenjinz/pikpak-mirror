@@ -19,8 +19,9 @@ internet. Early release: so far it has been used on one Windows 11 PC.
 ## Your folder list is backed up
 
 The app saves your list of synced folders and your settings to PikPak by itself, every time you change them. On a
-new PC, or after reinstalling Windows, sign in during setup and click **Restore**: your folders come back.
-Encrypted folders need your recovery key, and their names stay unreadable in the backup. Your passwords and your
+new PC, or after reinstalling Windows, sign in during setup and your folders come back by themselves: there is no
+list to confirm. Only the recovery key may be asked, for the encrypted folders (their names stay unreadable in the
+backup). Folders on a drive that is not connected wait on Home until it is. Your passwords and your
 key are never saved in the backup (rclone on this PC keeps them, so the PC can sync). See
 [Recovery](docs/RECOVERY.md).
 

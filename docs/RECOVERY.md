@@ -41,32 +41,47 @@ turns an obscured value back into the original. Treat that file as a secret.
 
    The sync task is registered **switched off**, so nothing can touch your cloud copy while you restore.
    (The app does the same in its setup: start it, sign in, and enter the recovery key when it asks. See the
-   easy way in step 2: the app can also restore your folder list.)
+   easy way in step 2: the app also restores your folder list by itself.)
 3. Check the key: `rclone lsf private:` should list your encrypted folder names.
 
 ## 2. Bring the folders back
 
 **The easy way: restore from the folder list backup.** The app saves your folder list to PikPak by itself, every
-time you change it. A new install can read it back: sign in, restore, enter the key.
+time you change it. A new install reads it back by itself: sign in, enter the key if it asks, and your folders
+come back. There is no list to confirm.
 
 1. Start the app and sign in with your PikPak email and password.
-2. If PikPak holds encrypted folders, the app asks for your **recovery key**. Type the 30-character key, with or
-   without spaces. If your encrypted storage came from `Install.ps1`, click **My key is a password and a salt**
-   and type the saved password and salt instead. The app checks the key against your encrypted folders: a wrong
-   key is refused, and nothing is changed. **I don't have my key** skips this step (see below).
+2. If PikPak holds encrypted folders and this PC's rclone has no key that opens them, the app asks for your
+   **recovery key**. Type the 30-character key, with or without spaces. If your encrypted storage came from
+   `Install.ps1`, click **My key is a password and a salt** and type the saved password and salt instead. The app
+   checks the key against your encrypted folders: a wrong key is refused, and nothing is changed. **I don't have
+   my key** skips this step (see below).
    If this PC already has a `private` remote that opens your encrypted folders, setup uses it without asking.
    If this PC's rclone already has a different key that doesn't open your data, setup refuses and says to remove
    it with `rclone config` first. Setup never deletes an existing `private` remote.
-3. The app shows **Found your folders in PikPak**, with the date of the backup and the PC it came from. Each
-   folder shows its size. A folder whose drive is missing on this PC starts unticked: click **Choose place...**
-   and pick a folder. Only the place on this PC changes; the folder keeps its PikPak place and its ID. A path
-   written as `C:\Users\<old>\...` moves to the new profile by itself when that old profile folder doesn't exist
-   on this PC. Paths written with `%USERPROFILE%` stay as they are and simply work.
-4. Click **Restore**. Your folders and settings come back as they were, where their drive is on this PC (a
-   holding or state folder on a drive this PC doesn't have goes back to its default place). The first sync of
-   each folder is a **merge**: it only adds what is missing on either side and deletes nothing. Downloads count
-   against the PikPak limits ([user guide](README.md#limits-and-notifications)); a big folder takes several days
-   and continues by itself.
+3. When PikPak holds the backup with folders, the app restores it straight away: every folder at its old place,
+   plus the settings and filters. A folder that is missing on a connected drive is created empty, so its first
+   sync brings it down from PikPak. The first sync of each folder is a **merge**: it only adds what is missing on
+   either side and deletes nothing. Downloads count against the PikPak limits
+   ([user guide](README.md#limits-and-notifications)); a big folder takes several days and continues by itself.
+   A holding or state folder on a drive this PC doesn't have goes back to its default place.
+4. The last setup screen says "Restored N folders from your backup of <date>." with a line for each of these,
+   when it applies:
+   - **Waiting for a drive**: the folder's drive is not connected on this PC. The folder is restored at its old
+     path and waits on Home ("Drive not connected"). Connect the drive and it carries on, or click **Locate...**
+     to pick another place on this PC. Only the place on this PC changes; the folder keeps its PikPak place and
+     its ID.
+   - **Paused until you enter your recovery key**: see below.
+   - **Not restored**: the folder has no place on this PC, or another folder has the same name. Add it again
+     with **Add a folder** on Home.
+   - Problems, if any step failed.
+
+   A path written as `C:\Users\<old>\...` moves to the new profile by itself when that old profile folder doesn't
+   exist on this PC. Paths written with `%USERPROFILE%` stay as they are and simply work.
+
+While the app looks for the backup and restores it, **Set up from scratch instead** skips the restore and goes to
+the normal *Choose folders* screen, where you pick your folders yourself. The old list in PikPak is replaced at
+the first save. Your folders in PikPak stay.
 
 What the backup holds, and what it does not:
 
@@ -75,16 +90,16 @@ What the backup holds, and what it does not:
 - It does not hold the **names or paths of encrypted folders** in readable form. They are saved in a second file
   that PikPak stores encrypted, so only your key opens it.
 - It does not hold sync history, logs or the holding folders.
-- No backup in PikPak (for example, it was never uploaded)? The app builds the same list from the ID files in
-  your PikPak folders. The screen says so. Your settings are then the defaults.
-- **Start fresh instead** skips the restore and goes to the normal *Choose folders* screen. The old list in
-  PikPak is replaced at the first save. Your folders in PikPak stay.
+- No backup in PikPak (for example, it was never uploaded)? The app finds your folders from the ID files in
+  your PikPak folders and shows them as a list with ticks, as before. Untick what you don't want, use
+  **Choose place...** for a folder whose drive is missing, and click **Restore**. Your settings are then the
+  defaults.
 
 **If you skipped the recovery key.** When the folder list backup was found, a synced folder that holds an
 encrypted folder (for example `D:\Documents` with `D:\Documents\Private` inside) is restored **paused**, so it
 cannot upload the private files readable. This happens whenever none of its encrypted folders came back inside
-it: the key was skipped, the encrypted folder was unticked, or you moved it. On the restore screen its row says
-"Contains encrypted folders. It resumes once you enter your recovery key." After the restore, **Settings** shows
+it: the key was skipped or the encrypted folder could not be restored. The last setup screen lists it under
+"Paused until you enter your recovery key". Afterwards, **Settings** shows
 "Some folders are paused until their encrypted folders are back" with **Check again**.
 
 Without the backup (folders found from their ID files), the app cannot know which synced folders hold encrypted
