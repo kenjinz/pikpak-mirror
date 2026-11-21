@@ -175,7 +175,7 @@ You need your PikPak **email and password** (the account must use email + passwo
      `%LOCALAPPDATA%\PikPakMirror`.
 
    You can run `Install.ps1` again at any time. Steps that are already done print `[skip]`.
-3. **Name your encrypted folders.** (The app does this for you under **Settings**, **Encrypted folders**. The
+3. **Name your encrypted folders.** (The app does this for you: **Add an encrypted folder** on Home. The
    manual way:) Open `config\mirror.config.psd1` in Notepad and fill in `PrivatePaths`, e.g.
    `PrivatePaths = @( @{ Path = 'D:\Personal'; Name = 'Personal' } )`.
    - If that exact folder is also listed in `Pairs`, **delete that folder's line from `Pairs`**. A folder cannot
@@ -218,7 +218,7 @@ is deleted on either side. The manual way: delete its line from `Pairs`.
 ## Adding an encrypted folder
 
 In the app: on **Home** press **Add a folder**, pick the folder and tick **Encrypt this folder**, then press
-**Add folder**. Or use **Settings**, **Encrypted folders**, **Add encrypted folder**, pick the folder: a box titled
+**Add folder**. Or press **Add an encrypted folder** on Home (this also takes a folder inside a synced folder) and pick the folder: a box titled
 **Make this folder encrypted?** shows the folder, its size and any plain copy found in PikPak. Press **Make
 encrypted**: that is also your confirmation. Both need the recovery key (the first time, the app asks you to save
 it). If the folder is already a synced folder, use the change described in *Changing a folder between synced and
@@ -234,9 +234,8 @@ encrypted*. The manual way:
 4. If that folder was synced *plain* before, its plain copy is still in `PikPak/PC-Mirror/...`. Delete that plain
    copy in the PikPak app or web page.
 
-**Stop encrypting a folder.** In the app: **Settings**, **Encrypted folders**, **Remove**. What is already in
-PikPak stays there, still locked. If the folder is inside a synced folder, it is synced normally (not locked)
-from then on.
+**Stop encrypting a folder.** In the app: on Home, the **...** button on the folder's row, **Remove encryption**
+(see *Changing a folder between synced and encrypted*).
 
 In the app, an encrypted folder shows an **Encrypted** label next to its name on Home. On Home, the **...** button on
 the row of an encrypted folder also has **Stop syncing**: nothing is deleted on the PC or in PikPak, the encrypted copy
@@ -246,7 +245,7 @@ has no **Stop syncing**, because it would then be uploaded readable with that fo
 ## Changing a folder between synced and encrypted
 
 Added a folder the wrong way? On **Home**, press the **...** button on the folder's row: a synced folder offers
-**Make encrypted**, an encrypted folder offers **Remove encryption**. (In **Settings**, **Add encrypted folder** on a
+**Make encrypted**, an encrypted folder offers **Remove encryption**. (On Home, **Add an encrypted folder** on a
 folder that is already synced does the same as **Make encrypted**.) A box asks you to confirm. It says whether
 PikPak can read the files afterwards, how big the folder is, and where the old copy in PikPak is.
 

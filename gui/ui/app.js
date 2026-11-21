@@ -3,7 +3,7 @@
 // setup.js (and restore.js for an earlier install's folders); Settings lives in settings.js.
 // No inline handlers (the CSP blocks them): every handler is attached with addEventListener.
 
-import { call, callFull, invoke, openPath, openUrl, listen, setPreviewAll } from './bridge.js';
+import { call, callFull, invoke, openPath, openUrl, listen, pickFolder, setPreviewAll } from './bridge.js';
 import { ELLIPSIS, GIB, $, $$, h, asList, say, messageOf, fmtSize, fmtDay, baseName } from './util.js';
 import { initFolderBoxes, addFolder, addEncryptedFolder, pauseFolder, locateFolder, adoptFolder, giveNewId, chooseSameId } from './folders.js';
 import { setupScreens, wireSetup } from './setup.js';
@@ -110,7 +110,6 @@ const screens = {
   settings: settingsScreen({
     confirmBox,
     changeKind: (path, to, msgId) => changeKind(path, to, msgId),
-    addEncrypted: (path, msgId) => addEncryptedFolder(path, msgId),
     preview: () => !!(app.info && app.info.preview_setup),
     pcName: () => (app.info && app.info.pc_name) || ''
   })
@@ -443,6 +442,28 @@ async function removeFolder(f) {
   }
 }
 
+/**
+ * Add an encrypted folder: also a folder inside a synced folder, which Add a folder can't take. A folder that is
+ * synced already is changed instead (the Make encrypted box).
+ */
+async function addEncrypted(btn) {
+  if (home.configBusy) return;
+  say('foldersMsg', '');
+  let path;
+  try { path = await pickFolder('Choose a folder to encrypt'); }
+  catch (e) { say('foldersMsg', "The folder window didn't open. Try again.", 'problem'); return; }
+  if (!path) return;
+  const same = p => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
+  btn.disabled = true;
+  try {
+    const synced = asList(home.status && home.status.Folders).find(f => !f.Private && same(f.Local) === same(path));
+    if (synced) await changeKind(path, 'encrypted');
+    else await addEncryptedFolder(path, 'foldersMsg');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /** Stop syncing an encrypted folder (private.remove). Only for a folder that is not inside a synced folder (the menu hides it there). */
 async function removeEncrypted(f) {
   if (home.configBusy) return;
@@ -456,7 +477,7 @@ async function removeEncrypted(f) {
     body: [
       h('p', { text: 'Nothing is deleted: the folder stays on this PC.' }),
       h('p', { text: 'New and changed files in it are no longer synced.' }),
-      h('p', { text: 'Its encrypted copy stays in PikPak. You can reconnect it or delete it in Settings, Encrypted folders in PikPak.' }),
+      h('p', { text: 'Its encrypted copy stays in PikPak. You can reconnect it or delete it in Settings, under Encryption.' }),
       h('p', { text: 'To stop for a while instead, use Pause syncing.' })
     ],
     ok: 'Stop syncing',
@@ -764,6 +785,7 @@ function wire() {
   wireRestore();
   wireSettings();
   $('#addFolder').addEventListener('click', () => addFolder());
+  $('#addEncrypted').addEventListener('click', ev => addEncrypted(ev.currentTarget));
   $('#openPikpak').addEventListener('click', ev => openPikpak(ev.currentTarget));
   $('#restoreSearch').addEventListener('input', renderRestore);
   // The tray's Sync now / Pause run outside the page: look at the status again afterwards.

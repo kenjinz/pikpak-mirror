@@ -108,10 +108,10 @@ before the first sync.
 
 To resume a paused folder:
 
-1. Go to **Settings**, **Encrypted folders**, and click **Enter recovery key...**. The box takes the same two
+1. Go to **Settings**, **Encryption**, and click **Enter recovery key...**. The box takes the same two
    forms of the key.
-2. Restore the encrypted folders it offers. If there is no list, use **Encrypted folders in PikPak**, **Reconnect...**
-   on each one.
+2. Restore the encrypted folders it offers. If there is no list, press **Show** next to **Encrypted folders in PikPak that aren't on this PC**, then
+   **Reconnect...** on each one.
 3. Click **Check again**. The paused folders resume once their encrypted folders are back.
 
 **The fallback: add the folders again, then repair.** Use this when the restore is not available (for
@@ -119,7 +119,7 @@ example, you set up with the command-line install), or when you want a different
 of folder.
 
 1. Add each folder again **at the place you want it** on the new PC. In the app: **Add a folder** on Home for a
-   synced folder, **Settings**, **Encrypted folders**, **Add encrypted folder** for an encrypted one. The manual
+   synced folder, **Add an encrypted folder** on Home for an encrypted one. The manual
    way: add the lines to `Pairs` and `PrivatePaths` in the config (see [README.md](README.md)), and for the
    encrypted ones run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Confirm-PrivatePaths.ps1` and type `YES`.
    - A synced folder must use the same `Remote` as before. The app works it out from the folder's path
@@ -127,8 +127,8 @@ of folder.
      the same path. If the path is different, use the manual way and write the old `Remote`.
    - An encrypted folder must have the same `Name` as before: it is the folder name inside `private:`.
    - The app recognises a folder you add again by its ID file (`.pikpak-sync.json` or `.pikpak-encrypted.json`),
-     so a folder restored with its files keeps its identity. **Settings**, **Encrypted folders in PikPak**, **Show**
-     lists the encrypted folders that are in PikPak, and **Reconnect...** connects one to an empty folder on this PC
+     so a folder restored with its files keeps its identity. **Settings**, **Encryption**, **Show**
+     lists the encrypted folders in PikPak that aren't on this PC, and **Reconnect...** connects one to an empty folder on this PC
      with the right name.
    - A folder you add by hand in the config (no `Id` line) gets its ID when the app starts: the ID in its ID file
      on the PC; without one, the ID in the ID file of its folder in PikPak (so it matches its PikPak copy and the

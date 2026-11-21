@@ -143,15 +143,15 @@
         <h4 class="section">What setup would do</h4>
         <ul class="preview-lines" id="donePreviewList"></ul>
       </div>
-      <div class="row-actions" id="doneActions" hidden>
+      <div class="row-actions gap-top" id="doneActions" hidden>
         <button class="btn btn-primary" id="doneStart">Start my first sync</button>
       </div>
-      <div class="row-actions" id="doneRetryActions" style="margin-top:1rem" hidden>
+      <div class="row-actions gap-top" id="doneRetryActions" hidden>
         <button class="btn" id="doneBack">Back</button>
         <button class="btn btn-primary" id="doneRetry">Try again</button>
       </div>
       <p class="msg" id="doneMsg" aria-live="polite" hidden></p>
-      <div class="row-actions" id="doneHomeActions" style="margin-top:.75rem" hidden>
+      <div class="row-actions gap-top" id="doneHomeActions" hidden>
         <button class="btn" id="doneHome">Go to home</button>
       </div>
     </div>
@@ -169,7 +169,7 @@
         <h4 class="section" style="margin-top:0">Synced folders</h4>
         <div class="folders" id="homeFolders"></div>
         <p class="msg" id="foldersMsg" aria-live="polite" hidden></p>
-        <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="addFolder">Add a folder</button></div>
+        <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="addFolder">Add a folder</button><button class="btn btn-quiet" id="addEncrypted" title="Also for a folder inside a synced folder">Add an encrypted folder</button></div>
       </div>
       <div class="side">
         <div class="panel">
@@ -229,8 +229,22 @@
       </div>
       <p class="msg" id="setMsg" aria-live="polite" hidden></p>
 
-      <h4 class="section">Encrypted folders</h4>
-      <div class="set" id="setPrivList"></div>
+      <h4 class="section">Encryption</h4>
+      <div class="set">
+        <div class="srow"><span>Recovery key<span class="small">You need it to open your encrypted folders on another PC.</span></span><button class="btn" id="setShowKey">Show recovery key</button></div>
+        <div id="setKeyBox" hidden style="padding:.2rem 0 .8rem">
+          <div id="setKeyTags"></div>
+          <div class="row-actions">
+            <button class="btn" id="setKeySave">Save to a file&hellip;</button>
+            <button class="btn" id="setKeyPrint">Print</button>
+            <button class="btn" id="setKeyCopy">Copy</button>
+          </div>
+        </div>
+        <div class="srow"><span>Encrypted folders in PikPak that aren't on this PC<span class="small">Reconnect one, download a copy, or delete it. Folders on this PC are on Home.</span></span><button class="btn" id="setRemoteShow">Show</button></div>
+      </div>
+      <p class="msg" id="setKeyMsg" aria-live="polite" hidden></p>
+      <div class="set" id="setRemoteList" style="margin-top:.5rem" hidden></div>
+      <p class="msg" id="setRemoteMsg" aria-live="polite" hidden></p>
       <div class="set" id="setNoKey" style="margin-top:.5rem" hidden>
         <div class="srow"><span id="setNoKeyText">Your PikPak has encrypted folders this PC can't open yet.</span><button class="btn" id="setNoKeyEnter">Enter recovery key&hellip;</button></div>
       </div>
@@ -252,38 +266,14 @@
         <p class="msg" id="setFoundMsg" aria-live="polite" hidden></p>
         <div class="row-actions" style="margin-top:.5rem"><button class="btn" id="setFoundCancel">Not now</button><button class="btn btn-primary" id="setFoundRestore">Restore</button></div>
       </div>
-      <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="setAddPrivate">Add encrypted folder</button></div>
       <p class="msg" id="setPrivMsg" aria-live="polite" hidden></p>
 
-      <h4 class="section">Encrypted folders in PikPak</h4>
-      <div class="set" id="setRemoteList"><div class="srow empty">Press Show to see the encrypted folders in PikPak.</div></div>
-      <div class="row-actions" style="margin-top:.5rem"><button class="btn btn-quiet" id="setRemoteShow">Show</button></div>
-      <p class="msg" id="setRemoteMsg" aria-live="polite" hidden></p>
-
-      <h4 class="section">Recovery key</h4>
+      <h4 class="section">Account and Windows</h4>
       <div class="set">
-        <div class="srow"><span>You need this to open your encrypted folders on another PC.</span><button class="btn" id="setShowKey">Show recovery key</button></div>
-        <div id="setKeyBox" hidden style="padding:.2rem 0 .8rem">
-          <div id="setKeyTags"></div>
-          <div class="row-actions">
-            <button class="btn" id="setKeySave">Save to a file&hellip;</button>
-            <button class="btn" id="setKeyPrint">Print</button>
-            <button class="btn" id="setKeyCopy">Copy</button>
-          </div>
-        </div>
-      </div>
-      <p class="msg" id="setKeyMsg" aria-live="polite" hidden></p>
-
-      <h4 class="section">Windows</h4>
-      <div class="set">
+        <div class="srow"><span id="setAccount">Checking&hellip;</span></div>
         <div class="srow"><label for="setAutostart"><span>Start PikPak Sync when I sign in to Windows<span class="small">It waits quietly in the tray icon.</span></span></label><input type="checkbox" class="switch" id="setAutostart"></div>
       </div>
       <p class="msg" id="setAutoMsg" aria-live="polite" hidden></p>
-
-      <h4 class="section">PikPak account</h4>
-      <div class="set">
-        <div class="srow"><span id="setAccount">Checking&hellip;</span></div>
-      </div>
 
       <details class="adv" id="setAdv">
         <summary>Advanced</summary>

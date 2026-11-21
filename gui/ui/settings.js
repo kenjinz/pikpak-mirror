@@ -250,17 +250,10 @@ async function toggleBandwidth(ev) {
 
 // ===== encrypted folders ==============================================================================
 
+// Encrypted folders on this PC are listed (and added, changed, removed) on Home; Settings keeps only what Home can't
+// show: the recovery key, the key-entry box and the encrypted folders in PikPak that aren't on this PC.
 function renderPrivate() {
   renderPausedKey();
-  const list = privatePaths(settings.config);
-  const box = $('#setPrivList');
-  if (!list.length) {
-    box.replaceChildren(h('div', { class: 'srow empty', text: 'No encrypted folders yet.' }));
-    return;
-  }
-  box.replaceChildren(...list.map(p => h('div', { class: 'srow' },
-    h('span', {}, String(p.Name || p.Path), h('span', { class: 'small path', text: String(p.Path) })),
-    h('button', { class: 'btn', text: 'Remove', onclick: ev => removePrivate(p, ev.currentTarget) }))));
 }
 
 async function refreshConfig() {
@@ -270,62 +263,13 @@ async function refreshConfig() {
   } catch (e) { failed('setPrivMsg', e, "Your settings couldn't be read again. Close and open Settings."); }
 }
 
-async function addPrivate(ev) {
-  const btn = ev.currentTarget;
-  say('setPrivMsg', '');
-  let path;
-  try { path = await pickFolder('Choose a folder to encrypt'); }
-  catch (e) { say('setPrivMsg', "The folder window didn't open. Try again.", 'problem'); return; }
-  if (!path) return;
-  // A folder that is already synced is changed by the background job (the same box as on Home).
-  const same = p => String(p || '').replace(/[\\/]+$/, '').toLowerCase();
-  if (asList(settings.config && settings.config.Pairs).some(x => same(x.Local) === same(path))) {
-    btn.disabled = true;
-    try {
-      if (await settings.hooks.changeKind(path, 'encrypted', 'setPrivMsg')) await refreshConfig();
-    } finally { btn.disabled = false; }
-    return;
-  }
-  // Otherwise the same recognition as Home's Add a folder (an earlier copy, the same ID, a move), encrypted, with
-  // the plain-copy check in its box. The flow says how it went on this section's line.
-  btn.disabled = true;
-  try {
-    await settings.hooks.addEncrypted(path, 'setPrivMsg');
-    await refreshConfig();
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-async function removePrivate(p, btn) {
-  say('setPrivMsg', '');
-  const ok = await settings.hooks.confirmBox({
-    title: 'Stop encrypting this folder?',
-    body: [h('p', {}, h('b', { text: String(p.Path) })),
-      h('p', { text: "It won't be locked any more. What's already in PikPak stays there, still locked." }),
-      h('p', { text: "If it's inside a synced folder, it will be synced normally from now on, without a lock." })],
-    ok: 'Remove', danger: true
-  });
-  if (!ok) return;
-  btn.disabled = true;
-  try {
-    const r = await call('private.remove', { path: String(p.Path) });
-    await refreshConfig();
-    const by = asList(r && r.backedUpPlainBy);
-    say('setPrivMsg', by.length ? 'Removed. It is now synced normally as part of ' + by.join(', ') + '.' : 'The folder is no longer encrypted.', 'done');
-  } catch (e) {
-    btn.disabled = false;
-    failed('setPrivMsg', e, "The folder couldn't be removed.");
-  }
-}
-
 // ===== encrypted folders this PC can't open yet (enter the recovery key later) ========================
 // Shown only when private.keyState says PikPak holds encrypted folders and this PC has no key. The typed key (or
 // password and salt) is read once when Check key is pressed, sent in private.usekey's `recoveryKey` / `salt` args and
 // never kept: the fields are emptied after the check, when the box is closed and whenever Settings is left.
 
 const NO_LIST_TEXT = 'Your recovery key opens your encrypted folders, but PikPak has no list of where they were on your old PC. '
-  + 'Connect each one yourself: press Reconnect' + ELLIPSIS + ' next to it under Encrypted folders in PikPak.';
+  + 'Connect each one yourself: in Encryption, press Show, then Reconnect' + ELLIPSIS + ' next to it.';
 
 async function loadKeyState() {
   const id = settings.loadId;
@@ -527,7 +471,7 @@ function restoreText(r) {
 async function leaveFound() {
   if (settings.keyBusy) return;
   closeUseKey();
-  say('setPrivMsg', 'Your recovery key is saved on this PC, but your encrypted folders were not restored. Reconnect them one by one under Encrypted folders in PikPak.', 'quiet');
+  say('setPrivMsg', 'Your recovery key is saved on this PC, but your encrypted folders were not restored. Reconnect them one by one: in Encryption, press Show.', 'quiet');
   await loadRemote();
 }
 
@@ -557,21 +501,25 @@ function remoteFailed(e, fallback) {
 function renderRemote() {
   const box = $('#setRemoteList');
   const list = settings.remote;
-  if (!list) { box.replaceChildren(h('div', { class: 'srow empty', text: 'Press Show to see the encrypted folders in PikPak.' })); return; }
-  if (!list.length) { box.replaceChildren(h('div', { class: 'srow empty', text: 'There are no encrypted folders in PikPak yet.' })); return; }
-  box.replaceChildren(...list.map(f => {
+  box.hidden = !list;
+  if (!list) { box.replaceChildren(); return; }
+  // Connected folders are on Home with their own menu; only the ones not on this PC are listed here.
+  const away = list.filter(f => !f.connectedTo);
+  if (!away.length) {
+    box.replaceChildren(h('div', { class: 'srow empty', text: list.length
+      ? 'Every encrypted folder in PikPak is on this PC. You find them on Home.'
+      : 'There are no encrypted folders in PikPak yet.' }));
+    return;
+  }
+  box.replaceChildren(...away.map(f => {
     const size = f.bytes === null || f.bytes === undefined ? 'size not known' : fmtSize(f.bytes);
-    const where = f.connectedTo ? 'Connected to ' + f.connectedTo + (f.paused ? ' (paused)' : '') : 'Not connected';
-    const row = h('div', { class: 'srow' },
-      h('span', {}, pikpakTip(h('span', { text: String(f.name) }), String(f.name)), h('span', { class: 'small path', text: size + ', ' + where })),
-      h('button', { class: 'btn btn-quiet', text: 'Copy PikPak name', onclick: () => copyRemoteName(f) }));
-    if (!f.connectedTo) {
-      row.append(
+    return h('div', { class: 'srow' },
+      h('span', {}, pikpakTip(h('span', { text: String(f.name) }), String(f.name)), h('span', { class: 'small path', text: size })),
+      h('span', { class: 'row-actions' },
+        h('button', { class: 'btn btn-quiet', text: 'Copy PikPak name', onclick: () => copyRemoteName(f) }),
         h('button', { class: 'btn', text: 'Reconnect' + ELLIPSIS, onclick: ev => reconnectRemote(f, ev.currentTarget) }),
         h('button', { class: 'btn', text: 'Download a copy' + ELLIPSIS, onclick: ev => downloadRemote(f, ev.currentTarget) }),
-        h('button', { class: 'btn danger', text: 'Delete from PikPak', onclick: ev => deleteRemote(f, ev.currentTarget) }));
-    }
-    return row;
+        h('button', { class: 'btn danger', text: 'Delete from PikPak', onclick: ev => deleteRemote(f, ev.currentTarget) })));
   }));
 }
 
@@ -853,7 +801,6 @@ export function wireSettings() {
   $('#setTime').addEventListener('change', changeTime);
   $('#setLogon').addEventListener('change', changeLogon);
   $('#setBw').addEventListener('change', toggleBandwidth);
-  $('#setAddPrivate').addEventListener('click', addPrivate);
   $('#setNoKeyEnter').addEventListener('click', openUseKey);
   $('#setUseKeyForm').addEventListener('submit', e => { e.preventDefault(); checkUseKey(); });
   $('#setUseKeyPairLink').addEventListener('click', () => { useKeyBox.setPairMode(!useKeyBox.pairMode); say('setUseKeyMsg', ''); useKeyBox.focus(); });

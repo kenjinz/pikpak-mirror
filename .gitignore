@@ -11,3 +11,6 @@ config/*.tmp
 
 # Your own configuration (the app writes it; config/mirror.config.sample.psd1 is the template)
 config/mirror.config.psd1
+
+# Local dev builds (dist\Start-PikPakSync.cmd runs them against the live install)
+dist/
