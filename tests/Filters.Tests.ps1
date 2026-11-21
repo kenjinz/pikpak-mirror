@@ -138,4 +138,17 @@ Describe 'M2: the global filter rules never exclude the ID files' {
             }
         }
     }
+
+    It 'no exclude rule of config\filters.txt matches the folder list backup files' {
+        $rules = @(Get-GlobalFilterRules -GlobalRulesPath $script:shipped)
+        foreach ($rule in $rules) {
+            if (-not $rule.StartsWith('- ')) { continue }
+            $rx = ConvertTo-TestGlobRegex $rule.Substring(2).Trim()
+            foreach ($name in '.pikpak-sync-backup.json', '.pikpak-sync-encrypted.json') {
+                foreach ($path in $name, ('Sub/' + $name)) {
+                    $path | Should -Not -Match $rx -Because ("rule '{0}' must not exclude {1}" -f $rule, $path)
+                }
+            }
+        }
+    }
 }
