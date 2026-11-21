@@ -2213,7 +2213,9 @@ function Invoke-GuiActionSetupFinish {
     # write is skipped and the remaining idempotent steps (tasks, local folders, private
     # confirmation) run again with the existing config. Under preview every step runs with -WhatIf
     # and nothing is written or registered. args.restore (instead of folders) restores the folders and
-    # settings of an earlier install (GuiBackup.ps1): no new key, the backup's filter rules, one backup push.
+    # settings of an earlier install (GuiBackup.ps1): no new key, the backup's filter rules, the missing folders
+    # created where their drive exists (step 'Restored folders', also run on a resume), one backup push. The result
+    # then has restored = @{ count; saved; driveMissing; pausedForKey; problems } for the screen to report.
     param([Parameter(Mandatory)][hashtable]$Ctx)
     $isPreview = Test-GuiPreview $Ctx
     $resume = $false
@@ -2227,7 +2229,8 @@ function Invoke-GuiActionSetupFinish {
     $cfgFull = [IO.Path]::GetFullPath($Ctx.ConfigPath)
     $steps = New-Object System.Collections.Generic.List[object]
     $preview = New-Object System.Collections.Generic.List[string]
-    $state = @{ Config = $null; Failed = $false; Preset = $null; Raw = $null }
+    $state = @{ Config = $null; Failed = $false; Preset = $null; Raw = $null; Restored = $null }
+    $savedText = ''
     $run = {
         param([string]$Name, [scriptblock]$Body)
         if ($state.Failed) { return }
@@ -2245,6 +2248,15 @@ function Invoke-GuiActionSetupFinish {
             Write-GuiLog $state.Config (Remove-GuiSecretText ('Setup step {0} failed: {1}' -f $Name, $_.Exception.Message) @($key))
         }
     }
+    # Creates the folders of the config that are missing, on drives that exist (a restore onto a new PC or a wiped
+    # disk). Idempotent, so it also runs on a resume. The summary for the result is left in $state.Restored.
+    $restoredStep = {
+        & $run 'Restored folders' {
+            $made = New-GuiRestoredFolders -Config $state.Config -WhatIf:$isPreview
+            $state.Restored = New-GuiRestoredSummary -Config $state.Config -Result $made -Saved $savedText
+            $made
+        }
+    }
     # The idempotent part of the install: safe to run again on a resume.
     $installSteps = {
         & $run 'Scheduled syncing' { Register-MirrorTasks -Config $state.Config -ConfigPath $cfgFull -RepoRoot $Ctx.RepoRoot -EnableSchedule -WhatIf:$isPreview }
@@ -2260,11 +2272,15 @@ function Invoke-GuiActionSetupFinish {
         $Ctx.Args['recoveryKey'] = $null
         try { $state.Config = Get-MirrorConfig -Path $cfgFull }
         catch { throw (New-GuiException 'config-invalid' ("Your settings file couldn't be read: {0}" -f $_.Exception.Message)) }
+        & $restoredStep
         & $installSteps
-        return @{ steps = $steps.ToArray(); complete = (-not $state.Failed) }
+        $out = @{ steps = $steps.ToArray(); complete = (-not $state.Failed) }
+        if ($null -ne $state.Restored) { $out['restored'] = $state.Restored }
+        return $out
     }
 
     $restore = Get-GuiRestoreArg -Ctx $Ctx
+    if ($null -ne $restore) { $savedText = [string]$restore.saved }
     $folders = @()
     foreach ($f in @(Get-GuiArg $Ctx 'folders' @())) {
         if ($f -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') }
@@ -2345,6 +2361,8 @@ function Invoke-GuiActionSetupFinish {
             $state.Config = Get-MirrorConfig -Path $cfgFull
             ('Settings saved to {0}' -f $cfgFull)
         }
+        # 6. The folders of the restored list that are missing are created (only where their drive exists).
+        if ($null -ne $restore) { & $restoredStep }
         & $installSteps
         if ($null -ne $restore) {
             & $run 'Folder list backup' { Invoke-GuiRestoreBackupPush -ConfigPath $cfgFull -Config $state.Config -Now $Ctx.Now -WhatIf:$isPreview }
@@ -2352,6 +2370,7 @@ function Invoke-GuiActionSetupFinish {
     }
     finally { $key = $null }
     $res = @{ steps = $steps.ToArray(); complete = (-not $state.Failed) -and (-not $isPreview) }
+    if ($null -ne $state.Restored) { $res['restored'] = $state.Restored }
     if ($isPreview) { $res['preview'] = $preview.ToArray() }
     $res
 }

@@ -1071,7 +1071,7 @@ Describe 'Invoke-GuiRequest' {
             $r = Invoke-Req (New-Req 'setup.finish' @{ resume = $true }) $s.Path
             $r.ok | Should -BeTrue
             $r.data.complete | Should -BeTrue
-            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'Scheduled syncing,Local folders,Encrypted folders confirmed'
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'Restored folders,Scheduled syncing,Local folders,Encrypted folders confirmed'
             [IO.File]::ReadAllText($s.Path) | Should -Be $before
             Should -Invoke Save-MirrorConfig -Times 0
             Should -Invoke Register-MirrorTasks -Times 1 -Exactly -ParameterFilter { $EnableSchedule -and $Config.StateDir -eq $s.StateDir -and $WhatIf -ne $true }
@@ -3398,7 +3398,7 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
             $r.ok | Should -BeTrue
             $r.data.complete | Should -BeTrue
-            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Recovery key,Filters,Settings,Scheduled syncing,Local folders,Encrypted folders confirmed,Folder list backup'
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'PikPak account,Settings check,Recovery key,Filters,Settings,Restored folders,Scheduled syncing,Local folders,Encrypted folders confirmed,Folder list backup'
             @($r.data.steps)[2].message | Should -Be 'Recovery key from your earlier install is in use'
             $raw = Get-RawMirrorConfig -Path $c.ConfigPath
             $p = @($raw.Pairs)
@@ -3533,6 +3533,95 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             $c = New-RestoreCase -KeySkipped
             $c.Restore.pairs = @()
             (Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath).error.code | Should -Be 'bad-request'
+        }
+
+        It 'finish with restore creates missing folders on present drives' {
+            $c = New-RestoreCase -WithKey
+            $script:Remotes = @('pikpak:', 'private:')
+            Remove-Item -LiteralPath $c.Docs, $c.Music -Recurse -Force
+            Test-Path -LiteralPath $c.Docs | Should -BeFalse
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.complete | Should -BeTrue
+            $step = @($r.data.steps | Where-Object { $_.name -eq 'Restored folders' })
+            $step.Count | Should -Be 1
+            $step[0].done | Should -BeTrue
+            foreach ($d in $c.Docs, $c.Music, $c.Vault) { Test-Path -LiteralPath $d -PathType Container | Should -BeTrue -Because $d }
+            @($r.data.restored.driveMissing).Count | Should -Be 0
+            @($r.data.restored.problems).Count | Should -Be 0
+        }
+
+        It 'finish with restore does not create folders on a missing drive and names them' {
+            $c = New-RestoreCase -KeySkipped
+            $letter = Get-MissingDrive
+            $gone = $letter + ':\Media\Music'
+            $c.Restore.pairs[1]['Local'] = $gone
+            Remove-Item -LiteralPath $c.Docs -Recurse -Force
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.complete | Should -BeTrue
+            Test-Path -LiteralPath ($letter + ':\') | Should -BeFalse
+            Test-Path -LiteralPath $c.Docs -PathType Container | Should -BeTrue
+            (@($r.data.restored.driveMissing) -join ',') | Should -Be 'Music'
+            @($r.data.restored.problems).Count | Should -Be 0
+            @((Get-RawMirrorConfig -Path $c.ConfigPath).Pairs)[1].Local | Should -Be $gone
+        }
+
+        It 'finish with restore reports a path that is a file and still completes' {
+            $c = New-RestoreCase -KeySkipped
+            Remove-Item -LiteralPath $c.Docs -Recurse -Force
+            [IO.File]::WriteAllText($c.Docs, 'not a folder')
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.complete | Should -BeTrue
+            @($r.data.restored.problems).Count | Should -Be 1
+            @($r.data.restored.problems)[0].name | Should -Be 'Docs'
+            @($r.data.restored.problems)[0].reason | Should -Not -BeNullOrEmpty
+            Test-Path -LiteralPath $c.Docs -PathType Leaf | Should -BeTrue
+            [IO.File]::ReadAllText($c.Docs) | Should -Be 'not a folder'
+        }
+
+        It 'resume runs the restored folders step again without errors' {
+            $c = New-RestoreCase -KeySkipped
+            $first = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $first.data.complete | Should -BeTrue
+            Remove-Item -LiteralPath $c.Docs, $c.Music -Recurse -Force
+            $r = Invoke-Req (New-Req 'setup.finish' @{ resume = $true }) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            $r.data.complete | Should -BeTrue
+            (@($r.data.steps) | ForEach-Object { $_.name }) -join ',' | Should -Be 'Restored folders,Scheduled syncing,Local folders,Encrypted folders confirmed'
+            Test-Path -LiteralPath $c.Docs -PathType Container | Should -BeTrue
+            Test-Path -LiteralPath $c.Music -PathType Container | Should -BeTrue
+            $r.data.restored.count | Should -Be 2
+            $again = Invoke-Req (New-Req 'setup.finish' @{ resume = $true }) $c.ConfigPath
+            $again.data.complete | Should -BeTrue
+        }
+
+        It 'finish with restore under preview creates nothing' {
+            $c = New-RestoreCase -WithKey
+            Mock Save-MirrorConfig { throw 'must not save' }
+            Remove-Item -LiteralPath $c.Docs, $c.Music -Recurse -Force
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore } -Preview) $c.ConfigPath
+            $r.ok | Should -BeTrue
+            Test-Path -LiteralPath $c.Docs | Should -BeFalse
+            Test-Path -LiteralPath $c.Music | Should -BeFalse
+            Test-Path -LiteralPath $c.Vault | Should -BeFalse
+            (@($r.data.preview) -join "`n") | Should -Match 'Would create 3 folder'
+            (@($r.data.steps | ForEach-Object { $_.name }) -contains 'Restored folders') | Should -BeTrue
+        }
+
+        It 'finish with restore returns the restored summary' {
+            $c = New-RestoreCase -KeySkipped
+            $letter = Get-MissingDrive
+            $c.Restore.pairs[1]['Local'] = $letter + ':\Media\Music'
+            $c.Restore['saved'] = '2026-11-20 10:30'
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            $r.data.restored.count | Should -Be 2
+            $r.data.restored.saved | Should -Be '2026-11-20 10:30'
+            (@($r.data.restored.driveMissing) -join ',') | Should -Be 'Music'
+            (@($r.data.restored.pausedForKey) -join ',') | Should -Be 'Docs'
+            @($r.data.restored.problems).Count | Should -Be 0
         }
     }
 }

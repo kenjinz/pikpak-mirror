@@ -473,13 +473,14 @@ function Invoke-GuiActionSetupSizes {
 }
 
 function Get-GuiRestoreArg {
-    # args.restore of setup.finish, checked: @{ settings; pairs; privatePaths; globalFilters; keySkipped } with
+    # args.restore of setup.finish, checked: @{ settings; pairs; privatePaths; globalFilters; keySkipped; saved } with
     # hashtable rows, or $null when the setup chose folders instead.
     param([Parameter(Mandatory)][hashtable]$Ctx)
     $r = Get-GuiArg $Ctx 'restore' $null
     if ($null -eq $r) { return $null }
     if ($r -isnot [hashtable] -or $null -ne (Get-GuiArg $Ctx 'folders' $null)) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') }
-    $out = @{ settings = @{}; pairs = @(); privatePaths = @(); globalFilters = ''; keySkipped = ($r['keySkipped'] -eq $true) }
+    $out = @{ settings = @{}; pairs = @(); privatePaths = @(); globalFilters = ''; keySkipped = ($r['keySkipped'] -eq $true); saved = '' }
+    if ($r['saved'] -is [string]) { $out.saved = $r['saved'] }
     if ($null -ne $r['settings']) {
         if ($r['settings'] -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The settings to restore are not valid.') }
         $out.settings = $r['settings']
@@ -563,4 +564,61 @@ function Invoke-GuiRestoreBackupPush {
     $r = Publish-ConfigBackup -ConfigPath $ConfigPath -Config $Config -Now $Now -Force
     if ($r.Error) { return "Your folder list couldn't be backed up to PikPak yet; the next sync tries again." }
     'Folder list backed up to PikPak'
+}
+
+function New-GuiRestoredFolders {
+    # The restore step that makes the folders of a restored list exist: every Pairs and PrivatePaths entry whose
+    # folder is missing is created empty, but only when its drive is there (new PC, wiped disk), so the first sync
+    # (a merge) can fill it from PikPak. A folder on a drive that is not connected is left alone and named in
+    # DriveMissing: it is not an error and nothing is made on a guessed drive. A path that is a file, or a folder that
+    # cannot be created, goes to Problems. Never throws and never deletes anything.
+    # @{ Done; Message; Created = @(paths); DriveMissing = @(@{ Name; Path }); Problems = @(@{ Name; Path; Reason }) }
+    [CmdletBinding(SupportsShouldProcess)]
+    param([Parameter(Mandatory)][hashtable]$Config)
+    $created = New-Object System.Collections.Generic.List[string]
+    $would = New-Object System.Collections.Generic.List[string]
+    $missing = New-Object System.Collections.Generic.List[object]
+    $problems = New-Object System.Collections.Generic.List[object]
+    $entries = New-Object System.Collections.Generic.List[object]
+    foreach ($e in @($Config['Pairs'])) { if ($e -is [System.Collections.IDictionary]) { $entries.Add(@{ Name = [string]$e['Name']; Path = [string]$e['Local'] }) } }
+    foreach ($e in @($Config['PrivatePaths'])) { if ($e -is [System.Collections.IDictionary]) { $entries.Add(@{ Name = [string]$e['Name']; Path = [string]$e['Path'] }) } }
+    foreach ($e in $entries) {
+        $path = [string]$e.Path
+        $name = [string]$e.Name
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $path }
+        try {
+            if ([string]::IsNullOrWhiteSpace($path)) { $problems.Add(@{ Name = $name; Path = $path; Reason = 'This folder has no path.' }); continue }
+            if (Test-Path -LiteralPath $path -PathType Container) { continue }
+            $root = [IO.Path]::GetPathRoot($path)
+            if ([string]::IsNullOrEmpty($root)) { $problems.Add(@{ Name = $name; Path = $path; Reason = 'The path is not a full path.' }); continue }
+            if (-not (Test-Path -LiteralPath $root)) { $missing.Add(@{ Name = $name; Path = $path }); continue }
+            if (Test-Path -LiteralPath $path) { $problems.Add(@{ Name = $name; Path = $path; Reason = 'A file with this name is already there, so the folder could not be made.' }); continue }
+            # -WhatIf is read from $WhatIfPreference, not ShouldProcess, so a preview prints nothing to the host.
+            if ($WhatIfPreference) { $would.Add($path); continue }
+            New-Item -ItemType Directory -Path $path -Force -ErrorAction Stop | Out-Null
+            $created.Add($path)
+        }
+        catch { $problems.Add(@{ Name = $name; Path = $path; Reason = [string]$_.Exception.Message }) }
+    }
+    $parts = @()
+    if ($would.Count -gt 0) { $parts += ('Would create {0} folder(s): {1}' -f $would.Count, ($would -join ', ')) }
+    elseif ($created.Count -gt 0) { $parts += ('Created {0} missing folder(s)' -f $created.Count) }
+    else { $parts += 'No folders needed creating' }
+    if ($missing.Count -gt 0) { $parts += ('{0} on a drive that is not connected' -f $missing.Count) }
+    if ($problems.Count -gt 0) { $parts += ('{0} could not be created' -f $problems.Count) }
+    @{ Done = $true; Message = ($parts -join '; '); Created = $created.ToArray(); DriveMissing = $missing.ToArray(); Problems = $problems.ToArray() }
+}
+
+function New-GuiRestoredSummary {
+    # The restored summary of setup.finish: how many folders, the backup date text, the names with a missing drive
+    # and the names left paused for the key, and the problems (name and reason only).
+    param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][hashtable]$Result, [AllowEmptyString()][string]$Saved = '')
+    $paused = @(@($Config['Pairs']) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['PausedForKey'] -eq $true } | ForEach-Object { [string]$_['Name'] })
+    @{
+        count        = (@($Config['Pairs']).Count + @($Config['PrivatePaths']).Count)
+        saved        = $Saved
+        driveMissing = @(@($Result.DriveMissing) | ForEach-Object { [string]$_.Name })
+        pausedForKey = $paused
+        problems     = @(@($Result.Problems) | ForEach-Object { @{ name = [string]$_.Name; reason = [string]$_.Reason } })
+    }
 }
