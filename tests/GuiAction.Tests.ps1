@@ -2624,3 +2624,261 @@ Describe 'Invoke-GuiRequest: backup' {
         $r.data.backup.stale | Should -BeFalse
     }
 }
+
+Describe 'Invoke-GuiRequest: using an existing recovery key' {
+    BeforeEach {
+        $script:KeyRemotes = @('pikpak:')
+        $script:KeyDirs = @('Photos/', '_holding/')
+        $script:KeyFiles = ''
+        $script:RawEntries = @('x1/', 'x2/')
+        $script:DecEntries = @('Photos/')
+        $script:Marker = '{"app":"pikpak-mirror","version":1,"id":"11111111-2222-3333-4444-555555555555","kind":"encrypted","name":"Photos","pikpak":"private:Photos","lastPath":"D:\\Old\\Photos","updated":"2026-11-01"}'
+        Mock Invoke-GuiRclone { throw ('unexpected rclone call: ' + ($RcloneArgs -join ' ')) }
+        Mock Invoke-GuiRclone { New-RcloneResult -Output $script:KeyRemotes } -ParameterFilter { $RcloneArgs[0] -eq 'listremotes' }
+        Mock Invoke-GuiRclone { New-RcloneResult -Output $script:KeyDirs } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'private:' -and $RcloneArgs[2] -eq '--dirs-only' }
+        Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 3 } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'private:.pikpak-sync-encrypted.json' }
+        Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 3 } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -like 'private:*/.pikpak-encrypted.json' }
+        Mock Invoke-GuiRclone { New-RcloneResult -Output @($script:Marker) } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'private:Photos/.pikpak-encrypted.json' }
+        Mock Invoke-RcloneCaptured { throw ('unexpected rclone call: ' + ($RcloneArgs -join ' ')) }
+        Mock Invoke-RcloneCaptured { New-RcloneResult -Output $script:RawEntries } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'pikpak:PC-Private' }
+        Mock Invoke-RcloneCaptured { New-RcloneResult -Output $script:DecEntries } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'private:' }
+        Mock Test-RcloneInstalled { $true }
+        Mock Test-SyncRunning { $false }
+        Mock New-MirrorPrivateRemote { [pscustomobject]@{ Name = 'private'; Done = $true; Skipped = $false; Message = 'created'; Warning = ''; Output = @() } }
+        $script:NoCfg = Join-Path $TestDrive 'none\mirror.config.psd1'
+    }
+
+    Context 'setup.usekey' {
+        It 'setup.usekey accepts a 30-character key in any case with spaces' {
+            $key = New-RecoveryKey
+            $typed = ($key.ToLowerInvariant() -replace '(.{5})(?=.)', '$1 ')
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = $typed }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            Should -Invoke New-MirrorPrivateRemote -Times 1 -Exactly -ParameterFilter { $Name -eq 'private' -and $BaseRemote -eq 'pikpak' -and $Password -ceq $key -and $Salt -eq '' -and $Mode -eq 'Existing' }
+            $r.data.usedExisting | Should -BeFalse
+            ($r | ConvertTo-Json -Depth 8) | Should -Not -Match $key
+        }
+
+        It 'setup.usekey rejects text that is not a recovery key' {
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = 'not a key' }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'bad-request'
+            $r.error.message | Should -Be "That isn't a recovery key. It has 30 letters and numbers."
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'setup.usekey passes password and salt as typed' {
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = '  My Old pass-word  '; salt = '  salt/value 9 ' }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            Should -Invoke New-MirrorPrivateRemote -Times 1 -Exactly -ParameterFilter { $Password -ceq 'My Old pass-word' -and $Salt -ceq 'salt/value 9' -and $Mode -eq 'Existing' }
+            ($r | ConvertTo-Json -Depth 8) | Should -Not -Match 'My Old pass-word'
+            ($r | ConvertTo-Json -Depth 8) | Should -Not -Match 'salt/value 9'
+        }
+
+        It 'refuses a salt with a double quote or a trailing backslash without calling rclone' {
+            foreach ($bad in @('sa"lt', ('salt' + [char]92))) {
+                $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = 'goodpassword'; salt = $bad }) $script:NoCfg
+                $r.ok | Should -BeFalse
+                $r.error.code | Should -Be 'bad-request'
+                $r.error.message | Should -Be (Get-UnsafePasswordMessage)
+            }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = ('pass' + [char]92); salt = 'goodsalt' }) $script:NoCfg
+            $r.error.code | Should -Be 'bad-request'
+            $r.error.message | Should -Be (Get-UnsafePasswordMessage)
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'setup.usekey needs both a password and a salt when a salt is given' {
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = '   '; salt = 'salt1' }) $script:NoCfg
+            $r.error.code | Should -Be 'bad-request'
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly
+        }
+
+        It 'maps a key that decrypts nothing to bad-key and never echoes the key' {
+            $key = New-RecoveryKey
+            $salt = 'SaltSaltSalt99'
+            Mock New-MirrorPrivateRemote { throw ("pikpak:PC-Private has data but none of it decrypts: the password or salt is wrong. $($Password) $($Salt)") }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = $key }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'bad-key'
+            $r.error.message | Should -Be "That key doesn't open your encrypted folders. Check it and try again."
+            ($r | ConvertTo-Json -Depth 8) | Should -Not -Match $key
+            $r2 = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = 'PlainPassword12'; salt = $salt }) $script:NoCfg
+            $r2.error.code | Should -Be 'bad-key'
+            ($r2 | ConvertTo-Json -Depth 8) | Should -Not -Match 'PlainPassword12'
+            ($r2 | ConvertTo-Json -Depth 8) | Should -Not -Match $salt
+        }
+
+        It 'setup.usekey refuses when PC-Private is empty' {
+            $script:RawEntries = @()
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'refused'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'setup.usekey says so when PC-Private cannot be checked' {
+            Mock Invoke-RcloneCaptured { New-RcloneResult -ExitCode 1 } -ParameterFilter { $RcloneArgs[1] -eq 'pikpak:PC-Private' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.error.code | Should -Be 'remote-failed'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'setup.usekey in preview calls nothing and writes nothing' {
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) } -Preview) $script:NoCfg
+            $r.ok | Should -BeTrue
+            @($r.data.preview).Count | Should -BeGreaterThan 0
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'setup.usekey uses an existing private remote that opens the data and never deletes it' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.usedExisting | Should -BeTrue
+            @($r.data.folders)[0].name | Should -Be 'Photos'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+        }
+
+        It 'setup.usekey refuses when an existing private remote does not open the data' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $script:KeyDirs = @()
+            $script:DecEntries = @()
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'refused'
+            $r.error.message | Should -Be "This PC already has a different recovery key in rclone (remote 'private'). Remove it with rclone config, then try again."
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+        }
+    }
+
+    Context 'the folders found' {
+        It 'lists encrypted folders from the companion file when present' {
+            $raw = @{ Pairs = @(); PrivatePaths = @(@{ Path = 'D:\Secret'; Name = 'Secret'; Id = '99999999-2222-3333-4444-555555555555'; Paused = $true }, @{ Path = 'E:\Tax'; Name = 'Tax' }) }
+            $docs = ConvertTo-BackupDocuments -RawConfig $raw -Now ([datetime]'2026-11-01T10:00:00') -PcName 'OLD-PC'
+            $script:KeyFiles = $docs.Encrypted
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @($script:KeyFiles -split "`n") } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'private:.pikpak-sync-encrypted.json' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.source | Should -Be 'backup'
+            $f = @($r.data.folders)
+            $f.Count | Should -Be 2
+            $f[0].name | Should -Be 'Secret'
+            $f[0].id | Should -Be '99999999-2222-3333-4444-555555555555'
+            $f[0].lastPath | Should -Be 'D:\Secret'
+            $f[0].paused | Should -BeTrue
+            $f[0].entry.Path | Should -Be 'D:\Secret'
+            $f[1].name | Should -Be 'Tax'
+            $f[1].paused | Should -BeFalse
+            $f[1].id | Should -BeNullOrEmpty
+        }
+
+        It 'falls back to the ID files when the companion file is missing' {
+            $script:KeyDirs = @('Photos/', '_holding/', 'Videos/')
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.source | Should -Be 'idfiles'
+            $f = @($r.data.folders)
+            (@($f | ForEach-Object { $_.name }) -join ',') | Should -Be 'Photos,Videos'
+            $f[0].id | Should -Be '11111111-2222-3333-4444-555555555555'
+            $f[0].lastPath | Should -Be 'D:\Old\Photos'
+            $f[0].paused | Should -BeFalse
+            $f[0].entry | Should -BeNullOrEmpty
+            $f[1].id | Should -BeNullOrEmpty
+            $f[1].lastPath | Should -BeNullOrEmpty
+        }
+
+        It 'falls back to the ID files when the companion file is not a backup' {
+            Mock Invoke-GuiRclone { New-RcloneResult -Output @('this is not json') } -ParameterFilter { $RcloneArgs[0] -eq 'cat' -and $RcloneArgs[1] -eq 'private:.pikpak-sync-encrypted.json' }
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.data.source | Should -Be 'idfiles'
+            @($r.data.folders).Count | Should -Be 1
+        }
+
+        It 'a folder list that cannot be listed is remote-failed' {
+            Mock Invoke-GuiRclone { New-RcloneResult -ExitCode 1 } -ParameterFilter { $RcloneArgs[0] -eq 'lsf' -and $RcloneArgs[1] -eq 'private:' -and $RcloneArgs[2] -eq '--dirs-only' }
+            $r =Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.error.code | Should -Be 'remote-failed'
+        }
+    }
+
+    Context 'private.usekey and private.keyState' {
+        It 'private.usekey refuses when a private remote exists' {
+            $s = New-TestSetup -Private
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $r = Invoke-Req (New-Req 'private.usekey' @{ recoveryKey = (New-RecoveryKey) }) $s.Path
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'refused'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+        }
+
+        It 'private.usekey creates the remote and lists the folders when there is none' {
+            $s = New-TestSetup -Private
+            $key = New-RecoveryKey
+            $r = Invoke-Req (New-Req 'private.usekey' @{ recoveryKey = $key }) $s.Path
+            $r.ok | Should -BeTrue
+            $r.data.source | Should -Be 'idfiles'
+            Should -Invoke New-MirrorPrivateRemote -Times 1 -Exactly -ParameterFilter { $Name -eq 'private' -and $BaseRemote -eq 'pikpak' -and $Password -ceq $key -and $Mode -eq 'Existing' }
+            ($r | ConvertTo-Json -Depth 8) | Should -Not -Match $key
+        }
+
+        It 'private.usekey needs a config and refuses while a sync runs' {
+            $r = Invoke-Req (New-Req 'private.usekey' @{ recoveryKey = (New-RecoveryKey) }) $script:NoCfg
+            $r.error.code | Should -Be 'config-missing'
+            $s = New-TestSetup
+            Mock Test-SyncRunning { $true }
+            $r2 = Invoke-Req (New-Req 'private.usekey' @{ recoveryKey = (New-RecoveryKey) }) $s.Path
+            $r2.error.code | Should -Be 'locked'
+        }
+
+        It 'private.usekey in preview writes nothing' {
+            $s = New-TestSetup
+            $r = Invoke-Req (New-Req 'private.usekey' @{ recoveryKey = (New-RecoveryKey) } -Preview) $s.Path
+            $r.ok | Should -BeTrue
+            @($r.data.preview).Count | Should -BeGreaterThan 0
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'private.keyState counts PikPak entries only when there is no key' {
+            $s = New-TestSetup
+            $r = Invoke-Req (New-Req 'private.keyState') $s.Path
+            $r.data.hasKey | Should -BeFalse
+            $r.data.encryptedData | Should -BeTrue
+            Should -Invoke Invoke-RcloneCaptured -Times 1 -Exactly
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $r2 = Invoke-Req (New-Req 'private.keyState') $s.Path
+            $r2.data.hasKey | Should -BeTrue
+            Should -Invoke Invoke-RcloneCaptured -Times 1 -Exactly
+            $script:KeyRemotes = @('pikpak:')
+            $script:RawEntries = @()
+            (Invoke-Req (New-Req 'private.keyState') $s.Path).data.encryptedData | Should -BeFalse
+        }
+
+        It 'Test-GuiExistingKeyOpens is false without a private remote, true when the data opens' {
+            Test-GuiExistingKeyOpens -Ctx @{ Config = $null } | Should -BeFalse
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            Test-GuiExistingKeyOpens -Ctx @{ Config = $null } | Should -BeTrue
+            $script:KeyDirs = @()
+            $script:DecEntries = @()
+            Test-GuiExistingKeyOpens -Ctx @{ Config = $null } | Should -BeFalse
+        }
+
+        It 'Test-GuiExistingKeyOpens accepts a key that only opens files or the holding folder' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $script:KeyDirs = @('_holding/')
+            $script:DecEntries = @('.pikpak-sync-encrypted.json')
+            Test-GuiExistingKeyOpens -Ctx @{ Config = $null } | Should -BeTrue
+        }
+    }
+}

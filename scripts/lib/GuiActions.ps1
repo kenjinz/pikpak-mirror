@@ -384,7 +384,7 @@ function Invoke-GuiRequest {
             if ($a -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The request args must be an object.') }
             $ctx.Args = $a
         }
-        foreach ($k in @('password', 'recoveryKey')) { if ($ctx.Args.ContainsKey($k)) { $secrets += [string]$ctx.Args[$k] } }
+        foreach ($k in @('password', 'recoveryKey', 'salt')) { if ($ctx.Args.ContainsKey($k)) { $secrets += [string]$ctx.Args[$k] } }
         if ($null -ne $Request.PSObject.Properties['preview']) { $ctx.Preview = [bool]$Request.preview }
 
         $needsConfig = $true
@@ -423,9 +423,12 @@ function Invoke-GuiRequest {
             'holding.restore' { $fn = 'Invoke-GuiActionHoldingRestore' }
             'key.show' { $fn = 'Invoke-GuiActionKeyShow' }
             'backup.push' { $fn = 'Invoke-GuiActionBackupPush' }
+            'private.usekey' { $fn = 'Invoke-GuiActionPrivateUsekey' }
+            'private.keyState' { $fn = 'Invoke-GuiActionPrivateKeyState' }
             'setup.signin' { $fn = 'Invoke-GuiActionSetupSignin'; $needsConfig = $false }
             'setup.finish' { $fn = 'Invoke-GuiActionSetupFinish'; $needsConfig = $false }
             'setup.newkey' { $fn = 'Invoke-GuiActionSetupNewkey'; $needsConfig = $false }
+            'setup.usekey' { $fn = 'Invoke-GuiActionSetupUsekey'; $needsConfig = $false }
             default { throw (New-GuiException 'bad-request' ("Unknown action '{0}'." -f $ctx.Action)) }
         }
 
@@ -459,6 +462,7 @@ function Invoke-GuiRequest {
     finally {
         if ($ctx.Args.ContainsKey('password')) { $ctx.Args['password'] = $null }
         if ($ctx.Args.ContainsKey('recoveryKey')) { $ctx.Args['recoveryKey'] = $null }
+        if ($ctx.Args.ContainsKey('salt')) { $ctx.Args['salt'] = $null }
         $secrets = $null
     }
 }
