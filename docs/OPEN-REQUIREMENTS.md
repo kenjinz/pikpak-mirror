@@ -61,6 +61,8 @@ you merge to main").
 | V22 | **Stop syncing an encrypted folder, then reconnect it.** | Use a small encrypted test folder (under 1 MB): **Stop syncing**. **Settings**, **Encrypted folders in PikPak**, **Show**: it says **Not connected**. **Reconnect...** to an empty folder: the files download and the folder is back on Home with its old name |
 | V23 | **Delete a not-connected folder from PikPak.** | Stop syncing a small encrypted test folder (under 1 MB), then **Delete from PikPak** in the same list and confirm: it is gone from the list and in PikPak's trash; the other encrypted folders and `_holding` are untouched |
 | V24 | **Remove encryption from a folder inside a synced folder.** | Use a small encrypted test folder (under 1 MB) inside a synced folder: **Remove encryption** on its row. After the job, its `.pikpak-encrypted.json` is gone on the PC and, after the next sync of the synced folder, the files appear readable in PikPak under that synced folder |
+| V25 | **Restore on a fresh install (folder list backup).** | On a spare Windows user or after clearing `%LOCALAPPDATA%\PikPakSync`, run setup and sign in: the restore screen lists your folders from the backup; with **I don't have my key**, a synced folder holding an encrypted folder is paused; with the key (password + salt), the encrypted folders come back and the first syncs are merges that download, never delete |
+| V26 | **Enter the recovery key later.** | After a restore with the key skipped: **Settings**, **Encrypted folders**, **Enter recovery key...**, then **Restore**: the encrypted folders are added and the synced folders paused for the key resume |
 
 ## Known limits (accepted, not planned)
 
@@ -70,3 +72,12 @@ you merge to main").
 - An upload killed by a power cut can leave a hidden stub that blocks that one file name in PikPak, and PikPak does not clear it by itself. The fix is to rename the file on the PC (README "Stuck uploads").
 - Files deleted in PikPak are kept 30 days on this PC only; they are lost with its disk. For encrypted folders those PC-side copies are readable, not encrypted.
 - `D:\PrivateMock` is mock data. Replace it with real files you want encrypted, then confirm again (the app does this when you add the folder).
+
+## Follow-ups from the folder list backup review (small, not planned)
+
+- After a skipped key, ticking a new encrypted folder on *Choose folders* stops setup at the Recovery key step (safe, but a dead end); hide the encrypted option or reuse the key there.
+- The restore screen's "Contains encrypted folders" note can under-warn compared with the engine's pause rule; the Done screen can say "about 0 B" while sizes are still loading; the backup date is shown in UTC.
+- **Check again** in Settings also re-confirms the encrypted folder paths after a hand edit of the config.
+- Errors other than rclone failures in the backup upload are logged with their full text (local log only).
+- Missing tests: a key password containing a double quote, an existing remote whose listing fails, a failed ID-file read, a mixed `private.restore` batch, a `%USERPROFILE%` path through the whole restore.
+- Without a backup file (folders rebuilt from ID files), synced folders are restored unpaused; an encrypted folder copied back without its `.pikpak-encrypted.json` would upload readable. Documented in `docs/RECOVERY.md`.
