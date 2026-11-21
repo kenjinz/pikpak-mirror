@@ -140,18 +140,22 @@ function ConvertTo-BackupDocuments {
         $config.Remove('PrivatePaths')
     }
 
+    # holdsEncrypted keeps a restored synced folder from uploading encrypted files in a readable form, so it fails
+    # closed: when an encrypted folder's path cannot be resolved, no pair can be ruled out and every pair is flagged.
     $privateKeys = @()
+    $unresolved = $false
     foreach ($e in $privatePaths) {
         if ($e -is [hashtable] -and $e.ContainsKey('Path') -and $e['Path']) {
-            try { $privateKeys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$e['Path']))) } catch { }
+            try { $privateKeys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$e['Path']))) } catch { $unresolved = $true }
         }
     }
     if ($config.ContainsKey('Pairs') -and $null -ne $config['Pairs']) {
         foreach ($pair in @($config['Pairs'])) {
             if ($pair -isnot [hashtable] -or -not $pair.ContainsKey('Local') -or -not $pair['Local']) { continue }
+            if ($unresolved) { $pair['holdsEncrypted'] = $true; continue }
             try { $localKey = ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$pair['Local'])) } catch { continue }
             foreach ($pk in $privateKeys) {
-                if ($pk.StartsWith($localKey)) { $pair['holdsEncrypted'] = $true; break }
+                if ($pk.StartsWith($localKey, [StringComparison]::Ordinal)) { $pair['holdsEncrypted'] = $true; break }
             }
         }
     }
@@ -300,4 +304,139 @@ function New-RestoreConfig {
     $config['Pairs'] = $pairList.ToArray()
     $config['PrivatePaths'] = $privList.ToArray()
     $config
+}
+
+# ===== Uploading the backup =========================================================================
+
+function Get-BackupStatus {
+    # @{ Hash; LastSuccess; FailingSince; EncryptedUploaded } from <StateDir>\backup.json. A separate file from
+    # state.json, so a push from the app never races the sync run's state save. Defaults when missing or unreadable.
+    # LastSuccess and FailingSince are 'yyyy-MM-ddTHH:mm:ss' text (local time) or $null.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$StateDir)
+
+    $status = @{ Hash = ''; LastSuccess = $null; FailingSince = $null; EncryptedUploaded = $false }
+    $file = Join-Path $StateDir 'backup.json'
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $status }
+    try {
+        $doc = [IO.File]::ReadAllText($file).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop
+        if ($doc -is [System.Management.Automation.PSCustomObject]) {
+            $p = $doc.PSObject.Properties
+            if ($null -ne $p['Hash'] -and $p['Hash'].Value -is [string]) { $status.Hash = $p['Hash'].Value }
+            foreach ($k in @('LastSuccess', 'FailingSince')) {
+                if ($null -ne $p[$k] -and $p[$k].Value -is [string] -and $p[$k].Value) { $status[$k] = $p[$k].Value }
+            }
+            if ($null -ne $p['EncryptedUploaded'] -and $p['EncryptedUploaded'].Value -is [bool]) { $status.EncryptedUploaded = $p['EncryptedUploaded'].Value }
+        }
+    }
+    catch { }
+    $status
+}
+
+function Save-BackupStatus {
+    # Writes <StateDir>\backup.json atomically (temp file, then move), UTF-8 without BOM.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$StateDir, [Parameter(Mandatory)][hashtable]$Status)
+
+    if (-not (Test-Path -LiteralPath $StateDir)) { New-Item -ItemType Directory -Path $StateDir -Force | Out-Null }
+    $file = Join-Path $StateDir 'backup.json'
+    $tmp = Join-Path $StateDir ('backup.json.{0}.tmp' -f [guid]::NewGuid().ToString('N'))
+    $doc = [ordered]@{
+        Hash = [string]$Status['Hash']; LastSuccess = $Status['LastSuccess']; FailingSince = $Status['FailingSince']
+        EncryptedUploaded = [bool]$Status['EncryptedUploaded']
+    }
+    try {
+        [IO.File]::WriteAllText($tmp, (ConvertTo-BackupJson -Value $doc -Pretty), (New-Object Text.UTF8Encoding $false))
+        Move-Item -LiteralPath $tmp -Destination $file -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Get-BackupAppVersion {
+    # The app version that carries this engine: the first word of the engine.hash marker the app writes next to
+    # scripts\. '' when the engine runs from a checkout (no marker) or the marker is not in that form.
+    [CmdletBinding()]
+    param([string]$EngineRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)))
+
+    try {
+        $marker = Join-Path $EngineRoot 'engine.hash'
+        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+            $first = ([IO.File]::ReadAllText($marker).Trim() -split '\s+')[0]
+            if ($first -match '^[0-9]+(\.[0-9]+)*([-+][0-9A-Za-z.-]+)?$') { return $first }
+        }
+    }
+    catch { }
+    ''
+}
+
+function Publish-ConfigBackup {
+    # Uploads the folder list backup when it changed (or with -Force). Never throws: a failure is logged, leaves the
+    # stored hash alone so the next call tries again, and comes back as Error. Log lines and errors name no
+    # encrypted folder and no secret.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][hashtable]$Config,
+        [Parameter(Mandatory)][datetime]$Now,
+        [switch]$Force
+    )
+
+    $result = @{ Uploaded = $false; Skipped = $false; Error = $null }
+    $temps = New-Object System.Collections.Generic.List[string]
+    $stateDir = [string]$Config['StateDir']
+    $stamp = $Now.ToString("yyyy-MM-dd'T'HH:mm:ss", [Globalization.CultureInfo]::InvariantCulture)
+    try {
+        $raw = Get-RawMirrorConfig -Path $ConfigPath
+        $filters = ''
+        $filtersFile = [string]$Config['GlobalFiltersFile']
+        if ($filtersFile -and (Test-Path -LiteralPath $filtersFile -PathType Leaf)) { $filters = [IO.File]::ReadAllText($filtersFile) }
+        $docs = ConvertTo-BackupDocuments -RawConfig $raw -GlobalFilters $filters -Now $Now -PcName ([string]$env:COMPUTERNAME) -AppVersion (Get-BackupAppVersion)
+
+        $status = Get-BackupStatus -StateDir $stateDir
+        if (-not $Force -and $status.Hash -ceq $docs.Hash) {
+            $result.Skipped = $true
+            return $result
+        }
+
+        $hasEncrypted = @(@($raw['PrivatePaths']) | Where-Object { $null -ne $_ }).Count -gt 0
+        $withEncrypted = $hasEncrypted -or $status.EncryptedUploaded
+
+        if (-not (Test-Path -LiteralPath $stateDir)) { New-Item -ItemType Directory -Path $stateDir -Force | Out-Null }
+        $uploads = @(, @('the folder list', $docs.Plain, (Join-RemotePath ([string]$Config['Remote']) @([string]$Config['MirrorRoot'], $script:BackupPlainName))))
+        if ($withEncrypted) {
+            $uploads += , @('the encrypted folder list', $docs.Encrypted, (Join-RemotePath ([string]$Config['PrivateRemote']) @($script:BackupEncryptedName)))
+        }
+        foreach ($u in $uploads) {
+            $tmp = Join-Path $stateDir ('backup-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
+            $temps.Add($tmp)
+            [IO.File]::WriteAllText($tmp, [string]$u[1], (New-Object Text.UTF8Encoding $false))
+            $r = Invoke-RcloneOutput -Arguments ([string[]]@('copyto', $tmp, [string]$u[2]))
+            if ($r.ExitCode -ne 0) { throw ('rclone could not upload {0} (exit code {1}).' -f $u[0], $r.ExitCode) }
+        }
+
+        $status.Hash = $docs.Hash
+        $status.LastSuccess = $stamp
+        $status.FailingSince = $null
+        $status.EncryptedUploaded = $withEncrypted
+        Save-BackupStatus -StateDir $stateDir -Status $status
+        $result.Uploaded = $true
+    }
+    catch {
+        $result.Error = [string]$_.Exception.Message
+        try { Write-MirrorLog -Config $Config -Message ('Folder list backup failed: ' + $result.Error) } catch { }
+        try {
+            $st = Get-BackupStatus -StateDir $stateDir
+            if ([string]::IsNullOrEmpty([string]$st.FailingSince)) {
+                $st.FailingSince = $stamp
+                Save-BackupStatus -StateDir $stateDir -Status $st
+            }
+        }
+        catch { }
+    }
+    finally {
+        foreach ($t in $temps) { try { Remove-Item -LiteralPath $t -Force -ErrorAction SilentlyContinue } catch { } }
+    }
+    $result
 }

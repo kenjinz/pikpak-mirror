@@ -2552,3 +2552,75 @@ Describe 'Invoke-GuiRequest: final-review fixes' {
         }
     }
 }
+
+Describe 'Invoke-GuiRequest: backup' {
+    BeforeEach {
+        Mock Invoke-GuiRclone { throw 'rclone must not run in unit tests' }
+        Mock Invoke-RcloneOutput { throw 'rclone must not run in unit tests' }
+        Mock Test-RcloneInstalled { $true }
+        Mock Test-SyncRunning { $false }
+        Mock Get-GuiTaskInfo { @{ Exists = $true; Enabled = $true; State = 'Ready'; NextRun = $null } }
+        Mock Get-GuiAboutInfo { @{ UsedBytes = $null; TotalBytes = $null; Email = $null; CheckedAt = $null; Error = 'network' } }
+    }
+
+    It 'backup.push in preview uploads nothing' {
+        $s = New-TestSetup -Private
+        $r = Invoke-Req (New-Req 'backup.push' -Preview) $s.Path
+        $r.ok | Should -BeTrue
+        $r.data.uploaded | Should -BeFalse
+        (@($r.data.preview) -join ' ') | Should -Be 'Would upload your folder list to PikPak (pikpak:PC-Mirror/.pikpak-sync-backup.json).'
+        Should -Invoke Invoke-RcloneOutput -Times 0 -Exactly
+        Test-Path -LiteralPath (Join-Path $s.StateDir 'backup.json') | Should -BeFalse
+    }
+
+    It 'backup.push uploads the folder list and reports it' {
+        $s = New-TestSetup
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 0; Output = @() } }
+        $r = Invoke-Req (New-Req 'backup.push') $s.Path
+        $r.ok | Should -BeTrue
+        $r.data.uploaded | Should -BeTrue
+        $r.data.skipped | Should -BeFalse
+        $r.data.error | Should -BeNullOrEmpty
+        Should -Invoke Invoke-RcloneOutput -Times 1 -Exactly
+        $again = Invoke-Req (New-Req 'backup.push') $s.Path
+        $again.data.skipped | Should -BeTrue
+        Should -Invoke Invoke-RcloneOutput -Times 1 -Exactly
+    }
+
+    It 'backup.push reports a failed upload as data, not as an error envelope' {
+        $s = New-TestSetup
+        Mock Invoke-RcloneOutput { [pscustomobject]@{ ExitCode = 1; Output = @() } }
+        $r = Invoke-Req (New-Req 'backup.push') $s.Path
+        $r.ok | Should -BeTrue
+        $r.data.uploaded | Should -BeFalse
+        $r.data.error | Should -Not -BeNullOrEmpty
+    }
+
+    It 'backup.push needs a config' {
+        $r = Invoke-Req (New-Req 'backup.push') (Join-Path $TestDrive 'none\mirror.config.psd1')
+        $r.error.code | Should -Be 'config-missing'
+    }
+
+    It 'status reports no backup problem by default' {
+        $s = New-TestSetup
+        $r = Invoke-Req (New-Req 'status') $s.Path
+        $r.data.backup.failingSince | Should -BeNullOrEmpty
+        $r.data.backup.stale | Should -BeFalse
+    }
+
+    It 'status reports a stale backup after StaleRunDays' {
+        $s = New-TestSetup
+        Save-BackupStatus -StateDir $s.StateDir -Status @{ Hash = ''; LastSuccess = $null; FailingSince = $script:Now.AddDays(-5).ToString('yyyy-MM-dd"T"HH:mm:ss'); EncryptedUploaded = $false }
+        $r = Invoke-Req (New-Req 'status') $s.Path
+        $r.data.backup.failingSince | Should -Be $script:Now.AddDays(-5).ToString('yyyy-MM-dd"T"HH:mm:ss')
+        $r.data.backup.stale | Should -BeTrue
+    }
+
+    It 'status does not call a recent failure stale' {
+        $s = New-TestSetup
+        Save-BackupStatus -StateDir $s.StateDir -Status @{ Hash = ''; LastSuccess = $null; FailingSince = $script:Now.AddDays(-1).ToString('yyyy-MM-dd"T"HH:mm:ss'); EncryptedUploaded = $false }
+        $r = Invoke-Req (New-Req 'status') $s.Path
+        $r.data.backup.failingSince | Should -Not -BeNullOrEmpty
+        $r.data.backup.stale | Should -BeFalse
+    }
+}

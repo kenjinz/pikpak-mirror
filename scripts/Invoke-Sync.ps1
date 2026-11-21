@@ -39,5 +39,8 @@ $summary = 'Sync finished. Ran: {0}. Skipped: {1}. Errors: {2}.' -f `
 try { Write-MirrorLog -Config $config -Message $summary } catch { }
 Write-Output $summary
 
+# Keep the folder list backup in PikPak current (an edit by hand, an earlier failed upload). Quiet: it only logs.
+try { $null = Publish-ConfigBackup -ConfigPath $ConfigPath -Config $config -Now (Get-Date) } catch { try { Write-MirrorLog -Config $config -Message ('Folder list backup failed: ' + $_.Exception.Message) } catch { } }
+
 if (@($result.Errors).Count -gt 0) { exit 1 }
 exit 0

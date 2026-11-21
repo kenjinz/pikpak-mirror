@@ -422,6 +422,7 @@ function Invoke-GuiRequest {
             'holding.list' { $fn = 'Invoke-GuiActionHoldingList' }
             'holding.restore' { $fn = 'Invoke-GuiActionHoldingRestore' }
             'key.show' { $fn = 'Invoke-GuiActionKeyShow' }
+            'backup.push' { $fn = 'Invoke-GuiActionBackupPush' }
             'setup.signin' { $fn = 'Invoke-GuiActionSetupSignin'; $needsConfig = $false }
             'setup.finish' { $fn = 'Invoke-GuiActionSetupFinish'; $needsConfig = $false }
             'setup.newkey' { $fn = 'Invoke-GuiActionSetupNewkey'; $needsConfig = $false }
@@ -491,7 +492,9 @@ function Invoke-GuiActionStatus {
         About        = @{ UsedBytes = $about['UsedBytes']; TotalBytes = $about['TotalBytes']; Error = $about['Error'] }
         ConfigErrors = @(Test-MirrorConfig -Config $cfg)
     }
-    Get-GuiStatus -Config $cfg -State $state -Now $Ctx.Now -Facts $facts
+    $status = Get-GuiStatus -Config $cfg -State $state -Now $Ctx.Now -Facts $facts
+    $status['backup'] = Get-GuiBackupInfo -Config $cfg -Now $Ctx.Now
+    $status
 }
 
 function Invoke-GuiActionAbout {

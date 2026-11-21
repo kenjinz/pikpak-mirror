@@ -43,6 +43,13 @@ Describe 'ConvertTo-BackupDocuments' {
         $docs.Hash | Should -Match '^[0-9a-f]{64}$'
     }
 
+    It 'flags every pair when an encrypted folder path cannot be resolved (fails closed)' {
+        $cfg = New-TestConfig
+        $cfg.PrivatePaths = @(@{ Path = 'D:\Bad<Path'; Name = 'Bad'; Id = 'enc-bad' })
+        $plain = (ConvertTo-BackupDocuments -RawConfig $cfg -GlobalFilters '' -Now $script:Now -PcName 'A' -AppVersion '1').Plain | ConvertFrom-Json
+        foreach ($p in @($plain.config.Pairs)) { $p.holdsEncrypted | Should -BeTrue }
+    }
+
     It 'does not change the config it is given' {
         $cfg = New-TestConfig
         $null = ConvertTo-BackupDocuments -RawConfig $cfg -GlobalFilters '' -Now $script:Now -PcName 'A' -AppVersion '1'
@@ -300,5 +307,217 @@ Describe 'Backup: New-RestoreConfig' {
         $text = ConvertTo-MirrorConfigText -Config $cfg
         $text | Should -Match "Name = 'Docs'"
         $text | Should -Match 'PrivatePaths = @\(\)'
+    }
+}
+
+Describe 'Backup: status file' {
+    It 'returns defaults when backup.json is missing or unreadable' {
+        $dir = Join-Path $TestDrive 'st1'
+        $s = Get-BackupStatus -StateDir $dir
+        $s.Hash | Should -Be ''
+        $s.LastSuccess | Should -BeNullOrEmpty
+        $s.FailingSince | Should -BeNullOrEmpty
+        $s.EncryptedUploaded | Should -BeFalse
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $dir 'backup.json'), '{ not json', (New-Object Text.UTF8Encoding $false))
+        (Get-BackupStatus -StateDir $dir).Hash | Should -Be ''
+    }
+
+    It 'saves and reads back without a BOM and leaves no temp file' {
+        $dir = Join-Path $TestDrive 'st2'
+        Save-BackupStatus -StateDir $dir -Status @{ Hash = 'abc'; LastSuccess = '2026-11-21T10:00:00'; FailingSince = $null; EncryptedUploaded = $true }
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $dir 'backup.json'))
+        ($bytes[0] -eq 0xEF) | Should -BeFalse
+        $s = Get-BackupStatus -StateDir $dir
+        $s.Hash | Should -Be 'abc'
+        $s.LastSuccess | Should -Be '2026-11-21T10:00:00'
+        $s.FailingSince | Should -BeNullOrEmpty
+        $s.EncryptedUploaded | Should -BeTrue
+        @(Get-ChildItem -LiteralPath $dir -Filter '*.tmp').Count | Should -Be 0
+    }
+}
+
+Describe 'Publish-ConfigBackup' {
+    BeforeAll {
+        function New-PublishSetup {
+            param([switch]$Private)
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $docs = Join-Path $root 'Docs'
+            New-Item -ItemType Directory -Path $docs -Force | Out-Null
+            $cfg = @{
+                Remote = 'pikpak'; PrivateRemote = 'private'; MirrorRoot = 'PC-Mirror'; HoldingRoot = 'PC-Holding'
+                LocalHolding = (Join-Path $root 'holding'); StateDir = (Join-Path $root 'state')
+                HoldingDays = 30; MaxDeletePercent = 10; DailyBudgetGB = 1; MonthlyBudgetGB = 30; QuotaWarnPercent = 90
+                StaleRunDays = 3; LogKeepDays = 60; BwLimit = ''; SyncTime = '20:00'; SyncAtLogon = $true
+                PrivatePaths = @()
+                Pairs = @(@{ Name = 'Docs'; Local = $docs; Remote = 'T/Docs'; Priority = 1 })
+            }
+            if ($Private) { $cfg.PrivatePaths = @(@{ Path = (Join-Path $root 'Photos'); Name = 'Photos' }) }
+            $path = Join-Path $root 'mirror.config.psd1'
+            [IO.File]::WriteAllText($path, (ConvertTo-MirrorConfigText -Config $cfg), (New-Object Text.UTF8Encoding $true))
+            [pscustomobject]@{ Root = $root; Path = $path; Cfg = $cfg; StateDir = $cfg.StateDir }
+        }
+        function Set-PublishConfig {
+            # Rewrites the config file by hand (no app save), with the given changes to the raw config.
+            param($Setup, [hashtable]$Changes)
+            foreach ($k in $Changes.Keys) { $Setup.Cfg[$k] = $Changes[$k] }
+            [IO.File]::WriteAllText($Setup.Path, (ConvertTo-MirrorConfigText -Config $Setup.Cfg), (New-Object Text.UTF8Encoding $true))
+        }
+        function Publish-Test {
+            param($Setup, [datetime]$At = $script:Now, [switch]$Force)
+            $loaded = Get-MirrorConfig -Path $Setup.Path
+            Publish-ConfigBackup -ConfigPath $Setup.Path -Config $loaded -Now $At -Force:$Force
+        }
+    }
+    BeforeEach {
+        $script:Uploads = New-Object System.Collections.Generic.List[object]
+        $script:RcloneExit = 0
+        Mock Invoke-RcloneOutput {
+            $src = $Arguments[1]
+            $script:Uploads.Add(@{ Args = @($Arguments); Text = [IO.File]::ReadAllText($src); Bytes = [IO.File]::ReadAllBytes($src); Src = $src })
+            [pscustomobject]@{ ExitCode = $script:RcloneExit; Output = @() }
+        }
+    }
+
+    It 'uploads both files and stores the hash' {
+        $s = New-PublishSetup -Private
+        $r = Publish-Test $s
+        $r.Uploaded | Should -BeTrue
+        $r.Skipped | Should -BeFalse
+        $r.Error | Should -BeNullOrEmpty
+        $script:Uploads.Count | Should -Be 2
+        $script:Uploads[0].Args[0] | Should -Be 'copyto'
+        $script:Uploads[0].Args[2] | Should -Be 'pikpak:PC-Mirror/.pikpak-sync-backup.json'
+        $script:Uploads[1].Args[2] | Should -Be 'private:.pikpak-sync-encrypted.json'
+        ($script:Uploads[0].Text | ConvertFrom-Json).kind | Should -Be 'folder-list-backup'
+        ($script:Uploads[1].Text | ConvertFrom-Json).kind | Should -Be 'encrypted-folder-list'
+        $script:Uploads[0].Bytes[0] | Should -Not -Be 0xEF
+        $script:Uploads[1].Bytes[0] | Should -Not -Be 0xEF
+        $script:Uploads[0].Text | Should -Not -Match 'Photos'
+        $st = Get-BackupStatus -StateDir $s.StateDir
+        $st.Hash | Should -Match '^[0-9a-f]{64}$'
+        $st.LastSuccess | Should -Not -BeNullOrEmpty
+        $st.FailingSince | Should -BeNullOrEmpty
+        $st.EncryptedUploaded | Should -BeTrue
+        foreach ($u in $script:Uploads) { Test-Path -LiteralPath $u.Src | Should -BeFalse }
+    }
+
+    It 'uploads nothing when the hash is unchanged' {
+        $s = New-PublishSetup -Private
+        $null = Publish-Test $s
+        $script:Uploads.Clear()
+        $r = Publish-Test $s
+        $r.Skipped | Should -BeTrue
+        $r.Uploaded | Should -BeFalse
+        $script:Uploads.Count | Should -Be 0
+    }
+
+    It 'uploads again with -Force' {
+        $s = New-PublishSetup
+        $null = Publish-Test $s
+        $script:Uploads.Clear()
+        (Publish-Test $s -Force).Uploaded | Should -BeTrue
+        $script:Uploads.Count | Should -Be 1
+    }
+
+    It 'uploads after a hand edit' {
+        $s = New-PublishSetup
+        $null = Publish-Test $s
+        $script:Uploads.Clear()
+        Set-PublishConfig $s @{ DailyBudgetGB = 5 }
+        $r = Publish-Test $s
+        $r.Uploaded | Should -BeTrue
+        $script:Uploads.Count | Should -Be 1
+        ($script:Uploads[0].Text | ConvertFrom-Json).config.DailyBudgetGB | Should -Be 5
+    }
+
+    It 'uploads the global filters text with the folder list' {
+        $s = New-PublishSetup
+        $f = Join-Path $s.Root 'filters.txt'
+        [IO.File]::WriteAllText($f, "- *.tmp`n", (New-Object Text.UTF8Encoding $false))
+        $loaded = Get-MirrorConfig -Path $s.Path
+        $loaded['GlobalFiltersFile'] = $f
+        $null = Publish-ConfigBackup -ConfigPath $s.Path -Config $loaded -Now $script:Now
+        ($script:Uploads[0].Text | ConvertFrom-Json).globalFilters | Should -Be "- *.tmp`n"
+    }
+
+    It 'keeps the hash and sets FailingSince when rclone fails, and does not throw' {
+        $s = New-PublishSetup
+        $script:RcloneExit = 1
+        $script:Res = $null
+        { $script:Res = Publish-Test $s } | Should -Not -Throw
+        $script:Res.Uploaded | Should -BeFalse
+        $script:Res.Error | Should -Not -BeNullOrEmpty
+        $st = Get-BackupStatus -StateDir $s.StateDir
+        $st.Hash | Should -Be ''
+        $st.FailingSince | Should -Be $script:Now.ToString('yyyy-MM-dd"T"HH:mm:ss')
+        foreach ($u in $script:Uploads) { Test-Path -LiteralPath $u.Src | Should -BeFalse }
+        # The next success clears it.
+        $script:RcloneExit = 0
+        (Publish-Test $s -At $script:Now.AddHours(5)).Uploaded | Should -BeTrue
+        (Get-BackupStatus -StateDir $s.StateDir).FailingSince | Should -BeNullOrEmpty
+    }
+
+    It 'keeps the first FailingSince across repeated failures' {
+        $s = New-PublishSetup
+        $script:RcloneExit = 1
+        $null = Publish-Test $s
+        $null = Publish-Test $s -At $script:Now.AddDays(1)
+        (Get-BackupStatus -StateDir $s.StateDir).FailingSince | Should -Be $script:Now.ToString('yyyy-MM-dd"T"HH:mm:ss')
+    }
+
+    It 'does not throw when the config file cannot be read' {
+        $s = New-PublishSetup
+        $loaded = Get-MirrorConfig -Path $s.Path
+        $r = Publish-ConfigBackup -ConfigPath (Join-Path $s.Root 'missing.psd1') -Config $loaded -Now $script:Now
+        $r.Uploaded | Should -BeFalse
+        $r.Error | Should -Not -BeNullOrEmpty
+    }
+
+    It 'skips the encrypted file when there are no encrypted folders and none was uploaded before' {
+        $s = New-PublishSetup
+        $r = Publish-Test $s
+        $r.Uploaded | Should -BeTrue
+        $script:Uploads.Count | Should -Be 1
+        $script:Uploads[0].Args[2] | Should -Be 'pikpak:PC-Mirror/.pikpak-sync-backup.json'
+        (Get-BackupStatus -StateDir $s.StateDir).EncryptedUploaded | Should -BeFalse
+    }
+
+    It 'uploads an empty encrypted list after the last encrypted folder is removed' {
+        $s = New-PublishSetup -Private
+        $null = Publish-Test $s
+        $script:Uploads.Clear()
+        Set-PublishConfig $s @{ PrivatePaths = @() }
+        $r = Publish-Test $s
+        $r.Uploaded | Should -BeTrue
+        $script:Uploads.Count | Should -Be 2
+        $script:Uploads[1].Args[2] | Should -Be 'private:.pikpak-sync-encrypted.json'
+        @(($script:Uploads[1].Text | ConvertFrom-Json).privatePaths).Count | Should -Be 0
+        (Get-BackupStatus -StateDir $s.StateDir).EncryptedUploaded | Should -BeTrue
+    }
+
+    It 'keeps the hash when only the encrypted upload fails' {
+        $s = New-PublishSetup -Private
+        Mock Invoke-RcloneOutput {
+            $script:Uploads.Add(@{ Args = @($Arguments); Src = $Arguments[1] })
+            $code = 0
+            if ($Arguments[2] -like 'private:*') { $code = 1 }
+            [pscustomobject]@{ ExitCode = $code; Output = @() }
+        }
+        $r = Publish-Test $s
+        $r.Uploaded | Should -BeFalse
+        $r.Error | Should -Not -BeNullOrEmpty
+        $st = Get-BackupStatus -StateDir $s.StateDir
+        $st.Hash | Should -Be ''
+        $st.FailingSince | Should -Not -BeNullOrEmpty
+    }
+
+    It 'writes no encrypted folder name to the log' {
+        $s = New-PublishSetup -Private
+        $script:RcloneExit = 1
+        $null = Publish-Test $s
+        $log = (Get-ChildItem -LiteralPath (Join-Path $s.StateDir 'logs') -Filter '*.log' | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join ''
+        $log | Should -Match 'folder list backup'
+        $log | Should -Not -Match 'Photos'
     }
 }
