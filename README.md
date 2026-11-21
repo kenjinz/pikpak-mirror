@@ -16,10 +16,17 @@ Windows SmartScreen will say "Windows protected your PC" because the file is not
 Needs Windows 10 or 11 (with the WebView2 runtime, already there on current versions) and, for the first run,
 internet. Early release: so far it has been used on one Windows 11 PC.
 
+## Your folder list is backed up
+
+The app saves your list of synced folders and your settings to PikPak by itself, every time you change them. On a
+new PC, or after reinstalling Windows, sign in during setup and click **Restore**: your folders come back.
+Encrypted folders need your recovery key, and their names stay unreadable in the backup. Your passwords and your
+key are never saved. See [Recovery](docs/RECOVERY.md).
+
 ## Learn more
 
 - [User guide](docs/README.md): folders, encryption, schedule, getting deleted files back, recovery.
-- [Recovery](docs/RECOVERY.md): restoring encrypted files on a new PC.
+- [Recovery](docs/RECOVERY.md): restoring your folders and encrypted files on a new PC.
 - [Open requirements](docs/OPEN-REQUIREMENTS.md): what is not built yet.
 
 Built with Tauri (Rust) around a PowerShell engine; GitHub Actions builds the release from a version tag.

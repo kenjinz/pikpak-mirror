@@ -40,12 +40,57 @@ turns an obscured value back into the original. Treat that file as a secret.
      installer says so, removes the remote, and you can try again.
 
    The sync task is registered **switched off**, so nothing can touch your cloud copy while you restore.
-   (The app does the same in its setup: start it, sign in, and enter the recovery key when it asks.)
+   (The app does the same in its setup: start it, sign in, and enter the recovery key when it asks. See the
+   easy way in step 2: the app can also restore your folder list.)
 3. Check the key: `rclone lsf private:` should list your encrypted folder names.
 
 ## 2. Bring the folders back
 
-**The normal way: add the folders again, then repair.** This is the one to use for both kinds of folder.
+**The easy way: restore from the folder list backup.** The app saves your folder list to PikPak by itself, every
+time you change it. A new install can read it back: sign in, restore, enter the key.
+
+1. Start the app and sign in with your PikPak email and password.
+2. If PikPak holds encrypted folders, the app asks for your **recovery key**. Type the 30-character key, with or
+   without spaces. If your encrypted storage came from `Install.ps1`, click **My key is a password and a salt**
+   and type the saved password and salt instead. The app checks the key against your encrypted folders: a wrong
+   key is refused, and nothing is changed. **I don't have my key** skips this step (see below).
+   If this PC already has a `private` remote that opens your encrypted folders, setup uses it without asking.
+   Setup never deletes an existing `private` remote.
+3. The app shows **Found your folders in PikPak**, with the date of the backup and the PC it came from. Each
+   folder shows its size. A folder whose drive is missing on this PC starts unticked: click **Choose place...**
+   and pick a folder. Only the place on this PC changes; the folder keeps its PikPak place and its ID. Paths
+   under the old user profile (`C:\Users\<old>\...`) move to the new profile by themselves.
+4. Click **Restore**. Your folders and settings come back as they were. The first sync of each folder is a
+   **merge**: it only adds what is missing on either side and deletes nothing. Downloads count against the
+   PikPak limits (README, *Limits and notifications*); a big folder takes several days and continues by itself.
+
+What the backup holds, and what it does not:
+
+- It holds the folder list and the settings (schedule, budgets, filters). It never holds your password or your
+  recovery key.
+- It does not hold the **names or paths of encrypted folders** in readable form. They are saved in a second file
+  that PikPak stores encrypted, so only your key opens it.
+- It does not hold sync history, logs or the holding folders.
+- No backup in PikPak (for example, it was never uploaded)? The app builds the same list from the ID files in
+  your PikPak folders. The screen says so. Your settings are then the defaults.
+- **Start fresh instead** skips the restore and goes to the normal *Choose folders* screen. The old list in
+  PikPak is replaced at the first save. Your folders in PikPak stay.
+
+**If you skipped the recovery key.** A synced folder that holds an encrypted folder (for example `D:\Documents`
+with `D:\Documents\Private` inside) is restored **paused**, so it cannot upload the private files readable. This
+happens whenever none of its encrypted folders came back inside it: the key was skipped, the encrypted folder was
+unticked, or you moved it. Its row says "Contains encrypted folders. It resumes once you enter your recovery
+key." To resume it:
+
+1. Go to **Settings**, **Encrypted folders**, and click **Enter recovery key...**. The box takes the same two
+   forms of the key.
+2. Restore the encrypted folders it offers. If there is no list, use **Encrypted folders in PikPak**, **Reconnect...**
+   on each one.
+3. Click **Check again**. The paused folders resume once their encrypted folders are back.
+
+**The fallback: add the folders again, then repair.** Use this when the restore is not available (for
+example, you set up with the command-line install), or when you want a different layout. It works for both kinds
+of folder.
 
 1. Add each folder again **at the place you want it** on the new PC. In the app: **Add a folder** on Home for a
    synced folder, **Settings**, **Encrypted folders**, **Add encrypted folder** for an encrypted one. The manual
