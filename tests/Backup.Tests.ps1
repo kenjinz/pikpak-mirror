@@ -406,7 +406,13 @@ Describe 'Publish-ConfigBackup' {
         $s = New-PublishSetup -Private
         $null = Publish-Test $s
         $script:Uploads.Clear()
-        $r = Publish-Test $s
+        # A later time and another PC name must not matter: the hash covers the content, not 'saved' or 'pcName'.
+        $oldPc = $env:COMPUTERNAME
+        try {
+            $env:COMPUTERNAME = 'OTHER-PC'
+            $r = Publish-Test $s -At $script:Now.AddHours(2)
+        }
+        finally { $env:COMPUTERNAME = $oldPc }
         $r.Skipped | Should -BeTrue
         $r.Uploaded | Should -BeFalse
         $script:Uploads.Count | Should -Be 0
