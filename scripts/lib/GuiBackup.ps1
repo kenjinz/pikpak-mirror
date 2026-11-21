@@ -334,8 +334,9 @@ function Get-GuiRestoreArg {
 
 function New-GuiRestoreSetupConfig {
     # The raw config of a restore: the backup's settings, the chosen folders as they were (Id, Remote, Name kept)
-    # and the preset's setup defaults for anything missing. When the key was skipped, a synced folder that holds
-    # encrypted folders is restored paused (PausedForKey says why), so it cannot upload them readable. The rclone
+    # and the preset's setup defaults for anything missing. A synced folder that holds encrypted folders and gets no
+    # restored encrypted folder under it is restored paused (PausedForKey says why), so it cannot upload them
+    # readable. The rclone
     # remote names are this PC's: setup.signin made 'pikpak' and setup.usekey 'private'.
     param(
         [Parameter(Mandatory)][hashtable]$Restore,
@@ -344,11 +345,28 @@ function New-GuiRestoreSetupConfig {
         [string]$Holding
     )
     $defaults = New-GuiSetupConfig -Folders @() -Preset $Preset -DriveRoot $DriveRoot -Holding $Holding
+    # Where the restored encrypted folders are. One whose path cannot be resolved counts as not restored (fail closed).
+    $privateKeys = @()
+    foreach ($e in @($Restore.privatePaths)) {
+        try { $privateKeys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$e['Path']))) } catch { }
+    }
     $pairs = New-Object System.Collections.Generic.List[hashtable]
     foreach ($p in @($Restore.pairs)) {
         $row = @{} + $p
         $row.Remove('Resolved')
-        if ($Restore.keySkipped -and $row['holdsEncrypted'] -eq $true) { $row['Paused'] = $true; $row['PausedForKey'] = $true }
+        # A synced folder that held encrypted folders keeps them out of PikPak only through the filter rules of
+        # restored PrivatePaths entries under it. With none (key skipped, folder unticked or moved elsewhere) it
+        # is restored paused for the key. A folder the owner paused stays paused as it was, so entering the key
+        # later never resumes it.
+        if ($row['holdsEncrypted'] -eq $true -and $row['Paused'] -ne $true) {
+            $covered = $false
+            try {
+                $localKey = ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$row['Local']))
+                foreach ($pk in $privateKeys) { if ($pk.StartsWith($localKey, [StringComparison]::Ordinal)) { $covered = $true; break } }
+            }
+            catch { $covered = $false }
+            if (-not $covered) { $row['Paused'] = $true; $row['PausedForKey'] = $true }
+        }
         $pairs.Add($row)
     }
     $priv = New-Object System.Collections.Generic.List[hashtable]

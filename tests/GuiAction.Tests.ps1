@@ -3165,6 +3165,38 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             $p[0].ContainsKey('PausedForKey') | Should -BeFalse
         }
 
+        It 'finish with restore leaves a pair the owner paused without PausedForKey' {
+            $c = New-RestoreCase -KeySkipped
+            $c.Restore.pairs[0]['Paused'] = $true
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            $p = @((Get-RawMirrorConfig -Path $c.ConfigPath).Pairs)
+            $p[0].Name | Should -Be 'Docs'
+            $p[0].Paused | Should -BeTrue
+            $p[0].ContainsKey('PausedForKey') | Should -BeFalse
+        }
+
+        It 'finish with restore pauses a pair whose encrypted folder was unticked, even with the key' {
+            $c = New-RestoreCase
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            $p = @((Get-RawMirrorConfig -Path $c.ConfigPath).Pairs)
+            $p[0].Paused | Should -BeTrue
+            $p[0].PausedForKey | Should -BeTrue
+        }
+
+        It 'finish with restore pauses a pair whose encrypted folder was moved outside it, even with the key' {
+            $c = New-RestoreCase -WithKey
+            $c.Restore.privatePaths[0]['Path'] = Join-Path $c.Root 'Elsewhere\Vault'
+            $script:Remotes = @('pikpak:', 'private:')
+            $r = Invoke-Req (New-Req 'setup.finish' @{ restore = $c.Restore }) $c.ConfigPath
+            $r.data.complete | Should -BeTrue
+            $raw = Get-RawMirrorConfig -Path $c.ConfigPath
+            @($raw.Pairs)[0].Paused | Should -BeTrue
+            @($raw.Pairs)[0].PausedForKey | Should -BeTrue
+            @($raw.PrivatePaths)[0].Name | Should -Be 'Vault'
+        }
+
         It 'finish with restore does not make a new key' {
             $c = New-RestoreCase -WithKey
             $script:Remotes = @('pikpak:')
