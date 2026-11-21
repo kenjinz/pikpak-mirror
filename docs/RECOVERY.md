@@ -55,14 +55,18 @@ time you change it. A new install can read it back: sign in, restore, enter the 
    and type the saved password and salt instead. The app checks the key against your encrypted folders: a wrong
    key is refused, and nothing is changed. **I don't have my key** skips this step (see below).
    If this PC already has a `private` remote that opens your encrypted folders, setup uses it without asking.
-   Setup never deletes an existing `private` remote.
+   If this PC's rclone already has a different key that doesn't open your data, setup refuses and says to remove
+   it with `rclone config` first. Setup never deletes an existing `private` remote.
 3. The app shows **Found your folders in PikPak**, with the date of the backup and the PC it came from. Each
    folder shows its size. A folder whose drive is missing on this PC starts unticked: click **Choose place...**
-   and pick a folder. Only the place on this PC changes; the folder keeps its PikPak place and its ID. Paths
-   under the old user profile (`C:\Users\<old>\...`) move to the new profile by themselves.
-4. Click **Restore**. Your folders and settings come back as they were. The first sync of each folder is a
-   **merge**: it only adds what is missing on either side and deletes nothing. Downloads count against the
-   PikPak limits (README, *Limits and notifications*); a big folder takes several days and continues by itself.
+   and pick a folder. Only the place on this PC changes; the folder keeps its PikPak place and its ID. A path
+   written as `C:\Users\<old>\...` moves to the new profile by itself when that old profile folder doesn't exist
+   on this PC. Paths written with `%USERPROFILE%` stay as they are and simply work.
+4. Click **Restore**. Your folders and settings come back as they were, where their drive is on this PC (a
+   holding or state folder on a drive this PC doesn't have goes back to its default place). The first sync of
+   each folder is a **merge**: it only adds what is missing on either side and deletes nothing. Downloads count
+   against the PikPak limits ([user guide](README.md#limits-and-notifications)); a big folder takes several days
+   and continues by itself.
 
 What the backup holds, and what it does not:
 
@@ -76,11 +80,19 @@ What the backup holds, and what it does not:
 - **Start fresh instead** skips the restore and goes to the normal *Choose folders* screen. The old list in
   PikPak is replaced at the first save. Your folders in PikPak stay.
 
-**If you skipped the recovery key.** A synced folder that holds an encrypted folder (for example `D:\Documents`
-with `D:\Documents\Private` inside) is restored **paused**, so it cannot upload the private files readable. This
-happens whenever none of its encrypted folders came back inside it: the key was skipped, the encrypted folder was
-unticked, or you moved it. Its row says "Contains encrypted folders. It resumes once you enter your recovery
-key." To resume it:
+**If you skipped the recovery key.** When the folder list backup was found, a synced folder that holds an
+encrypted folder (for example `D:\Documents` with `D:\Documents\Private` inside) is restored **paused**, so it
+cannot upload the private files readable. This happens whenever none of its encrypted folders came back inside
+it: the key was skipped, the encrypted folder was unticked, or you moved it. On the restore screen its row says
+"Contains encrypted folders. It resumes once you enter your recovery key." After the restore, **Settings** shows
+"Some folders are paused until their encrypted folders are back" with **Check again**.
+
+Without the backup (folders found from their ID files), the app cannot know which synced folders hold encrypted
+ones, so they are restored **unpaused**. An encrypted folder that comes back with its ID file
+(`.pikpak-encrypted.json`) is still left out of its synced folder, but check any folders copied from an old disk
+before the first sync.
+
+To resume a paused folder:
 
 1. Go to **Settings**, **Encrypted folders**, and click **Enter recovery key...**. The box takes the same two
    forms of the key.
@@ -117,8 +129,8 @@ of folder.
    `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Invoke-Sync.ps1 -Resync "<Name>"` (for an encrypted folder:
    `-Resync "private:<Name>"`). Repair merges both sides, so everything in PikPak is downloaded to the empty PC
    folder. Nothing is deleted.
-4. Downloads count against the PikPak limits (README, *Limits and notifications*). A big folder takes several
-   days. It continues at every sync by itself.
+4. Downloads count against the PikPak limits ([user guide](README.md#limits-and-notifications)). A big folder
+   takes several days. It continues at every sync by itself.
 
 **The command way: copy with rclone.** Useful for one folder, or when you want the files now.
 
