@@ -414,7 +414,9 @@ function Publish-ConfigBackup {
             $tmp = Join-Path $stateDir ('backup-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
             $temps.Add($tmp)
             [IO.File]::WriteAllText($tmp, [string]$u[1], (New-Object Text.UTF8Encoding $false))
-            $r = Invoke-RcloneOutput -Arguments ([string[]]@('copyto', $tmp, [string]$u[2]))
+            # --ignore-times: PikPak keeps no modification times, so rclone would compare sizes only and skip a
+            # change that keeps the size (a daily limit of 1 -> 5), leaving a stale backup.
+            $r = Invoke-RcloneOutput -Arguments ([string[]]@('copyto', $tmp, [string]$u[2], '--ignore-times'))
             if ($r.ExitCode -ne 0) { throw ('rclone could not upload {0} (exit code {1}).' -f $u[0], $r.ExitCode) }
         }
 

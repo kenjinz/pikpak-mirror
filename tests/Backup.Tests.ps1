@@ -389,6 +389,9 @@ Describe 'Publish-ConfigBackup' {
         $script:Uploads[0].Args[0] | Should -Be 'copyto'
         $script:Uploads[0].Args[2] | Should -Be 'pikpak:PC-Mirror/.pikpak-sync-backup.json'
         $script:Uploads[1].Args[2] | Should -Be 'private:.pikpak-sync-encrypted.json'
+        # PikPak keeps no modification times, so rclone compares sizes only: a same-size change (a limit of 1 -> 5)
+        # would be skipped without --ignore-times.
+        foreach ($u in $script:Uploads) { $u.Args | Should -Contain '--ignore-times' }
         ($script:Uploads[0].Text | ConvertFrom-Json).kind | Should -Be 'folder-list-backup'
         ($script:Uploads[1].Text | ConvertFrom-Json).kind | Should -Be 'encrypted-folder-list'
         $script:Uploads[0].Bytes[0] | Should -Not -Be 0xEF
