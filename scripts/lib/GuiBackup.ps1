@@ -143,13 +143,25 @@ function Invoke-GuiUseKey {
     # as it is. Otherwise an existing remote is a refusal. A 'private' remote is never deleted here: it may hold
     # the owner's only working key.
     param([Parameter(Mandatory)][hashtable]$Ctx, [switch]$Setup)
-    $k = Get-GuiKeyArgs -Ctx $Ctx
+    # In setup, no key typed at all asks to use this PC's existing 'private' remote (setup.discover said hasKey):
+    # it is used only when it opens the data, else the owner is asked to type the key.
+    $noKey = $Setup -and ([string](Get-GuiArg $Ctx 'recoveryKey' '')).Trim() -eq '' -and ([string](Get-GuiArg $Ctx 'salt' '')).Trim() -eq ''
+    $k = $null
+    if (-not $noKey) { $k = Get-GuiKeyArgs -Ctx $Ctx }
     $Ctx.Args['recoveryKey'] = $null
     $Ctx.Args['salt'] = $null
     $names = Get-GuiKeyRemotes -Ctx $Ctx
     $target = $names.Base + ':PC-Private'
+    $typeKey = 'Type your recovery key.'
     try {
+        if ($noKey -and -not (Test-GuiPreview $Ctx) -and -not (Test-RemoteListed -Listing (Get-GuiRemoteList) -Name $names.Private)) {
+            throw (New-GuiException 'bad-request' $typeKey)
+        }
         if (Test-GuiPreview $Ctx) {
+            if ($noKey) {
+                return @{ source = $null; folders = @(); usedExisting = $true
+                    preview = @(("Would check that this PC's rclone remote '{0}' opens the encrypted folders in {1}, then list them." -f $names.Private, $target)) }
+            }
             return @{ source = $null; folders = @(); usedExisting = $false
                 preview = @(("Would check that {0} holds encrypted folders, then create the rclone remote '{1}' with the key you typed (it is removed again when it opens nothing)." -f $target, $names.Private)) }
         }
@@ -166,11 +178,14 @@ function Invoke-GuiUseKey {
                 $res['usedExisting'] = $true
                 return $res
             }
+            if ($state -eq 'unchecked') { throw (New-GuiException 'remote-failed' "PikPak couldn't be checked, so the key wasn't used. Check your internet connection and try again.") }
+            if ($noKey) { throw (New-GuiException 'bad-request' $typeKey) }
             if ($state -eq 'wrong') {
                 throw (New-GuiException 'refused' ("This PC already has a different recovery key in rclone (remote '{0}'). Remove it with rclone config, then try again." -f $names.Private))
             }
-            if ($state -eq 'unchecked') { throw (New-GuiException 'remote-failed' "PikPak couldn't be checked, so the key wasn't used. Check your internet connection and try again.") }
         }
+        # Never reached without a key ($noKey is setup only and every setup state above returned or threw).
+        if ($noKey) { throw (New-GuiException 'bad-request' $typeKey) }
         try { $null = New-MirrorPrivateRemote -Name $names.Private -BaseRemote $names.Base -Password $k.Password -Salt $k.Salt -Mode Existing }
         catch { throw (New-GuiException 'bad-key' "That key doesn't open your encrypted folders. Check it and try again.") }
     }

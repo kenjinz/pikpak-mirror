@@ -2769,6 +2769,43 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             $r.error.message | Should -Not -Match 'different recovery key'
             Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
         }
+
+        It 'setup.usekey with no key uses an existing private remote that opens the data' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $r = Invoke-Req (New-Req 'setup.usekey' @{}) $script:NoCfg
+            $r.ok | Should -BeTrue
+            $r.data.usedExisting | Should -BeTrue
+            @($r.data.folders)[0].name | Should -Be 'Photos'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Should -Invoke Invoke-GuiRclone -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly -ParameterFilter { $RcloneArgs[0] -eq 'config' }
+        }
+
+        It 'setup.usekey with no key and no private remote asks for the key' {
+            $r = Invoke-Req (New-Req 'setup.usekey' @{ recoveryKey = ''; salt = '' }) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.code | Should -Be 'bad-request'
+            $r.error.message | Should -Be 'Type your recovery key.'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+            Should -Invoke Invoke-RcloneCaptured -Times 0 -Exactly
+        }
+
+        It 'setup.usekey with no key and a private remote that opens nothing asks for the key' {
+            $script:KeyRemotes = @('pikpak:', 'private:')
+            $script:KeyDirs = @()
+            $script:DecEntries = @()
+            $r = Invoke-Req (New-Req 'setup.usekey' @{}) $script:NoCfg
+            $r.error.code | Should -Be 'bad-request'
+            $r.error.message | Should -Be 'Type your recovery key.'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
+
+        It 'private.usekey still needs a key' {
+            $r = Invoke-Req (New-Req 'private.usekey' @{}) $script:NoCfg
+            $r.ok | Should -BeFalse
+            $r.error.message | Should -Not -Be 'Type your recovery key.'
+            Should -Invoke New-MirrorPrivateRemote -Times 0 -Exactly
+        }
     }
 
     Context 'the folders found' {
