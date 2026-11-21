@@ -46,6 +46,16 @@ function Get-SyncIntervalMinutes {
     return 60
 }
 
+function Get-DefaultConfigPath {
+    # The one live config, wherever the scripts run from: the app's own engine, the repo or a worktree.
+    # So a dev build started from main or a worktree runs its own scripts on the owner's real folders.
+    # Without LOCALAPPDATA: the config next to the scripts, as before.
+    param([Parameter(Mandatory)][string]$ScriptsRoot)
+    $base = $env:LOCALAPPDATA
+    if ([string]::IsNullOrEmpty($base)) { return (Join-Path $ScriptsRoot 'config\mirror.config.psd1') }
+    return (Join-Path $base 'PikPakSync\config\mirror.config.psd1')
+}
+
 function Get-MirrorConfig {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path)

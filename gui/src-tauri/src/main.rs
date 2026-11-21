@@ -16,6 +16,8 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 pub struct AppState {
     pub repo_root: Option<PathBuf>,
     pub preview_setup: bool,
+    /// "PikPak Sync", or "PikPak Sync (dev · <folder>)" when the scripts are not the app's own engine.
+    pub app_name: String,
 }
 
 #[derive(Serialize)]
@@ -24,6 +26,7 @@ struct AppInfo {
     repo_root: String,
     version: String,
     pc_name: String,
+    app_name: String,
 }
 
 fn has_flag(flag: &str) -> bool {
@@ -56,6 +59,7 @@ fn app_info(app: tauri::AppHandle, state: State<'_, AppState>) -> AppInfo {
             .unwrap_or_default(),
         version: app.package_info().version.to_string(),
         pc_name: std::env::var("COMPUTERNAME").unwrap_or_default(),
+        app_name: state.app_name.clone(),
     }
 }
 
@@ -72,6 +76,9 @@ fn main() {
     if repo_root.is_none() {
         bridge::log("start-up: no repo folder with scripts\\Invoke-GuiAction.ps1 was found and the built-in scripts could not be unpacked");
     }
+    // Scripts from the repo or a worktree (not the app's own engine): a dev build, named as such.
+    let dev = engine::dev_label(repo_root.as_deref(), engine::engine_root().as_deref());
+    let app_name = engine::app_name(dev.as_deref());
 
     tauri::Builder::default()
         // Must be first: a second launch hands over to this one and exits.
@@ -97,6 +104,7 @@ fn main() {
         .manage(AppState {
             repo_root,
             preview_setup,
+            app_name: app_name.clone(),
         })
         .invoke_handler(tauri::generate_handler![
             gui_action,
@@ -105,7 +113,10 @@ fn main() {
             tray::set_tray_paused
         ])
         .setup(move |app| {
-            tray::create(app.handle())?;
+            tray::create(app.handle(), &app_name)?;
+            if let Some(window) = app.get_webview_window(tray::MAIN_WINDOW) {
+                let _ = window.set_title(&app_name);
+            }
             {
                 // Old "PikPak Backup" start-with-Windows entry: move it to the new name (never fails start-up).
                 use tauri_plugin_autostart::ManagerExt;

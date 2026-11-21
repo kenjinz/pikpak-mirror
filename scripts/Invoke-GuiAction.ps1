@@ -19,7 +19,7 @@ try {
     # lack it: rebuild PATH from the machine and user settings (Update-SessionPath, InstallSteps.ps1).
     Update-SessionPath
     if ([string]::IsNullOrEmpty($ConfigPath)) {
-        $ConfigPath = Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'config\mirror.config.psd1'
+        $ConfigPath = Get-DefaultConfigPath -ScriptsRoot (Split-Path -Path $PSScriptRoot -Parent)
     }
     # The app sends UTF-8 (paths with diacritics), whatever the console code page is.
     $reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding $false))

@@ -206,6 +206,36 @@ pub fn embedded_root_in(root: &Path, bundle: &Bundle, log: &dyn Fn(&str)) -> Opt
     }
 }
 
+/// The app's name as shown in the window title, tray and app bar.
+pub const APP_NAME: &str = "PikPak Sync";
+
+fn same_folder(a: &Path, b: &Path) -> bool {
+    let key = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
+    key(a) == key(b)
+}
+
+/// `Some(folder name)` when the app runs scripts from somewhere other than its own engine folder
+/// (`engine`): a dev build started from the repo or a worktree. `None` for the app's own engine.
+pub fn dev_label(repo_root: Option<&Path>, engine: Option<&Path>) -> Option<String> {
+    let root = repo_root?;
+    if engine.is_some_and(|e| same_folder(root, e)) {
+        return None;
+    }
+    let name = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.display().to_string());
+    Some(name)
+}
+
+/// "PikPak Sync", or "PikPak Sync (dev · <folder>)" for a dev build.
+pub fn app_name(dev_label: Option<&str>) -> String {
+    match dev_label {
+        Some(label) => format!("{APP_NAME} (dev \u{b7} {label})"),
+        None => APP_NAME.to_string(),
+    }
+}
+
 /// The last step of the root lookup: the engine this app carries, unpacked in `%LOCALAPPDATA%\PikPakSync`.
 pub fn embedded_root() -> Option<PathBuf> {
     embedded_root_in(&engine_root()?, &embedded(), &crate::bridge::log)
@@ -458,6 +488,32 @@ mod tests {
         ensure_unpacked(&root, &bun(&files, "h1")).unwrap();
         assert_eq!(read(&root, "engine.hash"), "1.0.0 h1");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dev_label_is_none_for_the_apps_own_engine() {
+        let engine = PathBuf::from(r"C:\Users\u\AppData\Local\PikPakSync");
+        assert_eq!(dev_label(Some(&engine), Some(&engine)), None);
+        // Different spelling of the same folder (case, trailing backslash, slashes).
+        let spelled = PathBuf::from(r"c:/users/U/AppData/Local/pikpaksync\");
+        assert_eq!(dev_label(Some(&spelled), Some(&engine)), None);
+        assert_eq!(dev_label(None, Some(&engine)), None, "no scripts at all is not a dev build");
+    }
+
+    #[test]
+    fn dev_label_names_the_repo_or_worktree_folder() {
+        let engine = PathBuf::from(r"C:\Users\u\AppData\Local\PikPakSync");
+        let repo = PathBuf::from(r"G:\pikpak-mirror");
+        let worktree = PathBuf::from(r"G:\pikpak-mirror\.worktrees\my-feature");
+        assert_eq!(dev_label(Some(&repo), Some(&engine)).as_deref(), Some("pikpak-mirror"));
+        assert_eq!(dev_label(Some(&worktree), Some(&engine)).as_deref(), Some("my-feature"));
+        assert_eq!(dev_label(Some(&repo), None).as_deref(), Some("pikpak-mirror"), "no LOCALAPPDATA");
+    }
+
+    #[test]
+    fn app_name_marks_a_dev_build() {
+        assert_eq!(app_name(None), "PikPak Sync");
+        assert_eq!(app_name(Some("my-feature")), "PikPak Sync (dev \u{b7} my-feature)");
     }
 
     #[test]

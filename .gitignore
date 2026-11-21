@@ -14,3 +14,4 @@ config/mirror.config.psd1
 
 # Local dev builds (dist\Start-PikPakSync.cmd runs them against the live install)
 dist/
+config/*.stale

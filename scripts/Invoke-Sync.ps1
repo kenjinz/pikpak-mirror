@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\_load.ps1')
 
 if ([string]::IsNullOrEmpty($ConfigPath)) {
-    $ConfigPath = Join-Path (Split-Path -Path $PSScriptRoot -Parent) 'config\mirror.config.psd1'
+    $ConfigPath = Get-DefaultConfigPath -ScriptsRoot (Split-Path -Path $PSScriptRoot -Parent)
 }
 
 $config = $null

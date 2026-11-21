@@ -13,7 +13,6 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 pub const MAIN_WINDOW: &str = "main";
 const TRAY_ID: &str = "main";
-const APP_NAME: &str = "PikPak Sync";
 /// Windows keeps at most 127 characters of a tray tooltip.
 const TOOLTIP_MAX_CHARS: usize = 127;
 
@@ -67,7 +66,7 @@ pub fn show_main_window(app: &AppHandle) {
     }
 }
 
-pub fn create(app: &AppHandle) -> tauri::Result<()> {
+pub fn create(app: &AppHandle, app_name: &str) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
     let sync_now = MenuItem::with_id(app, "backup", "Sync now", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", pause_label(false), true, None::<&str>)?;
@@ -78,7 +77,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     TrayIconBuilder::with_id(TRAY_ID)
         // Neutral until the page reports the real status: never look "fine" by default.
         .icon(icon(Tone::Working)?)
-        .tooltip(APP_NAME)
+        .tooltip(app_name)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -209,7 +208,7 @@ fn report(app: &AppHandle, action: &str, result: Result<Value, String>) {
         };
         app.dialog()
             .message(message)
-            .title(APP_NAME)
+            .title(app.state::<AppState>().app_name.clone())
             .kind(MessageDialogKind::Warning)
             .show(|_| {});
     }
@@ -226,7 +225,7 @@ pub fn set_tray_status(app: AppHandle, tone: String, tooltip: String) -> Result<
     tray.set_icon(Some(image)).map_err(|e| format!("internal: {e}"))?;
     let tooltip = tooltip.trim();
     let tooltip: String = if tooltip.is_empty() {
-        APP_NAME.to_string()
+        app.state::<AppState>().app_name.clone()
     } else {
         tooltip.chars().take(TOOLTIP_MAX_CHARS).collect()
     };

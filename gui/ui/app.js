@@ -72,7 +72,7 @@ function initConfirmBox() {
 // ===== router =======================================================================================
 
 const app = {
-  info: null,      // app_info(): {preview_setup, repo_root, version, pc_name}
+  info: null,      // app_info(): {preview_setup, repo_root, version, pc_name, app_name}
   current: 'loading'
 };
 
@@ -204,13 +204,19 @@ function onWindowBack() {
 window.addEventListener('focus', onWindowBack);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) onWindowBack(); });
 
+/** "PikPak Sync", or "PikPak Sync (dev · <folder>)" when the app runs scripts from a repo or worktree. */
+function appName() {
+  return (app.info && app.info.app_name) || 'PikPak Sync';
+}
+
 function updateTray() {
   let tone = 'attention';
-  let tooltip = "PikPak Sync: couldn't check your folders";
+  const name = appName();
+  let tooltip = name + ": couldn't check your folders";
   const s = home.status;
   if (!home.error && s) {
     tone = s.Situation === 'running' ? 'working' : (s.Tone === 'ok' ? 'ok' : 'attention');
-    tooltip = 'PikPak Sync: ' + (s.Title || '');
+    tooltip = name + ': ' + (s.Title || '');
     // Keeps the tray's Pause/Resume item right when syncing was paused or resumed elsewhere.
     if (s.Situation !== 'config-error') invoke('set_tray_paused', { paused: s.Situation === 'paused' }).catch(() => {});
   }
@@ -800,6 +806,8 @@ function wire() {
 async function start() {
   wire();
   try { app.info = await invoke('app_info'); } catch (e) { app.info = null; }
+  document.title = appName();
+  $('.appname').textContent = appName();
   if (app.info && app.info.preview_setup) {
     // Preview mode walks the setup screens whatever this PC has; every call runs as a preview.
     setPreviewAll(true);

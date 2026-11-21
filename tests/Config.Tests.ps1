@@ -97,6 +97,23 @@ Describe 'Private path spellings (C2)' {
     }
 }
 
+Describe 'Get-DefaultConfigPath' {
+    BeforeEach { $script:savedLocalAppData = $env:LOCALAPPDATA }
+    AfterEach { $env:LOCALAPPDATA = $script:savedLocalAppData }
+
+    It 'is the one live config in LOCALAPPDATA, wherever the scripts run from (repo, worktree or the app engine)' {
+        $env:LOCALAPPDATA = 'C:\Users\u\AppData\Local'
+        foreach ($root in @('G:\repo', 'G:\repo\.worktrees\feature', 'C:\Users\u\AppData\Local\PikPakSync')) {
+            Get-DefaultConfigPath -ScriptsRoot $root | Should -BeExactly 'C:\Users\u\AppData\Local\PikPakSync\config\mirror.config.psd1'
+        }
+    }
+
+    It 'falls back to the config next to the scripts when LOCALAPPDATA is not set' {
+        $env:LOCALAPPDATA = ''
+        Get-DefaultConfigPath -ScriptsRoot 'G:\repo' | Should -BeExactly 'G:\repo\config\mirror.config.psd1'
+    }
+}
+
 Describe 'Get-MirrorConfig' {
     It 'expands env vars and strips trailing backslash' {
         $p = New-TempConfig @'

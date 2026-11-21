@@ -13,11 +13,19 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\_load.ps1')
 
 $repoRoot = Split-Path -Path $PSScriptRoot -Parent
-if ([string]::IsNullOrEmpty($ConfigPath)) { $ConfigPath = Join-Path $repoRoot 'config\mirror.config.psd1' }
-# config\mirror.config.psd1 is personal and not in the repository: start from the sample when there is none yet.
+if ([string]::IsNullOrEmpty($ConfigPath)) { $ConfigPath = Get-DefaultConfigPath -ScriptsRoot $repoRoot }
+# The config is personal and not in the repository: start from the sample when there is none yet, with the
+# filter rules it names (filters.txt) next to it.
 $samplePath = Join-Path $repoRoot 'config\mirror.config.sample.psd1'
 if (-not (Test-Path -LiteralPath $ConfigPath) -and (Test-Path -LiteralPath $samplePath)) {
+    $configDir = Split-Path -Path $ConfigPath -Parent
+    if (-not (Test-Path -LiteralPath $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
     Copy-Item -LiteralPath $samplePath -Destination $ConfigPath
+    $filtersPath = Join-Path $configDir 'filters.txt'
+    $filtersSample = Join-Path $repoRoot 'config\filters.txt'
+    if (-not (Test-Path -LiteralPath $filtersPath) -and (Test-Path -LiteralPath $filtersSample)) {
+        Copy-Item -LiteralPath $filtersSample -Destination $filtersPath
+    }
     Write-Host ('Created {0} from the sample. Edit it to list your folders.' -f $ConfigPath) -ForegroundColor Yellow
 }
 $pinnedVersion = 'v1.75.2'
