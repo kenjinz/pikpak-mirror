@@ -10,7 +10,7 @@
 // user signs in, sent once with setup.signin and never kept.
 
 import { callFull, pickFolder, pickSaveFile, writeTextFile, copyText } from './bridge.js';
-import { ELLIPSIS, CHECK, GIB, $, h, asList, say, messageOf, fmtSize, baseName, keyGroups, keySheetLines, keySheetText, fillKeySheet, clearKeySheet } from './util.js';
+import { ELLIPSIS, CHECK, GIB, $, h, asList, say, messageOf, fmtSize, fmtLocalDay, baseName, keyGroups, keySheetLines, keySheetText, fillKeySheet, clearKeySheet } from './util.js';
 import * as restore from './restore.js';
 
 const KEY_FILE_NAME = 'PikPak recovery key.txt';
@@ -575,12 +575,6 @@ function renderFinishFailed(steps, failed, message) {
   if (!$('#doneRetry').disabled) $('#doneRetry').focus();
 }
 
-/** The day the backup was saved as the browser shows dates; '' when there is none or it can't be read. */
-function savedDay(saved) {
-  const d = new Date(String(saved || ''));
-  return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
-}
-
 /**
  * What a restore did (setup.finish's `restored`): how many folders came back and which still wait. Only shown when this
  * setup is a restore: a normal setup that is resumed gets a `restored` too and says nothing of it.
@@ -589,12 +583,14 @@ function renderRestored(restored) {
   const box = $('#doneRestored');
   if (!restore.active() || !restored) { box.hidden = true; box.replaceChildren(); return; }
   const count = Number(restored.count) || 0;
-  const day = savedDay(restored.saved);
+  const day = fmtLocalDay(restored.saved);
   const lines = ['Restored ' + count + (count === 1 ? ' folder' : ' folders') + ' from your backup' + (day ? ' of ' + day : '') + '.'];
   const drives = asList(restored.driveMissing).map(String);
   const paused = asList(restored.pausedForKey).map(String);
   if (drives.length) lines.push('Waiting for a drive: ' + drives.join(', ') + '.');
   if (paused.length) lines.push('Paused until you enter your recovery key: ' + paused.join(', ') + '.');
+  const left = restore.leftOut();
+  if (left.length) lines.push('Not restored (no place on this PC, or another folder has the same name): ' + left.join(', ') + '.');
   for (const p of asList(restored.problems)) lines.push(String((p && p.name) || '') + ': ' + String((p && p.reason) || ''));
   box.replaceChildren(...lines.map(t => h('p', { class: 'lead', style: 'margin-bottom:.5rem', text: t })));
   box.hidden = false;

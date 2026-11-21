@@ -11,10 +11,12 @@
 // worked and whenever the key screen is left. It is never logged.
 
 import { callFull, pickFolder } from './bridge.js';
-import { ELLIPSIS, GIB, $, h, asList, say, messageOf, fmtSize, fmtDay } from './util.js';
+import { ELLIPSIS, GIB, $, h, asList, say, messageOf, fmtSize, fmtLocalDay } from './util.js';
 
 const SKIP_NOTE = 'Your encrypted folders stay locked in PikPak. You can enter the key later in Settings.';
 const RESTORING_TEXT = 'Restoring your folders from PikPak' + ELLIPSIS;
+const LOOKING_TEXT = 'Looking for your folders in PikPak' + ELLIPSIS;
+const SCRATCH_TEXT = 'Nothing from an earlier install will be restored. You choose which folders to sync yourself.';
 const NO_BACKUP = 'No backup of your settings was found. Your folders were found from PikPak; settings are back to defaults.';
 const HOLDS_NOTE = 'Contains encrypted folders. It resumes once you enter your recovery key.';
 const FRESH_TEXT = "Your old folder list in PikPak will be replaced the first time you save. The folders' ID files stay in PikPak.";
@@ -42,6 +44,7 @@ const rs = {
   asking: false,      // the Start fresh / Set up from scratch confirmation is open
   held: false,        // an answer came in while it was open: afterKey runs when it is cancelled
   auto: false,        // a backup restores by itself: sizes were not fetched, so the list (if Back shows it) has none
+  leftOut: [],        // names of backup folders the automatic restore leaves out (no place, or a name used twice)
   checking: false,    // setup.usekey with a typed key is running
   previewLines: []    // what discover / scan / usekey would have done (preview mode)
 };
@@ -68,7 +71,7 @@ export function afterSignin(account) {
   rs.seq++;
   Object.assign(rs, {
     phase: 'discover', error: null, retry: null, canSkip: false, discover: null, encrypted: null,
-    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, held: false, auto: false, previewLines: []
+    keyAsked: false, keySkipped: false, fromScan: false, rows: [], active: false, asking: false, held: false, auto: false, leftOut: [], previewLines: []
   });
   oldBox.pairMode = false;
   oldBox.clear();
@@ -141,7 +144,7 @@ function afterKey() {
   const b = rs.discover && rs.discover.backup;
   if (b) {
     rs.fromScan = false;
-    buildRows(asList(b.Pairs && asList(b.Pairs).length ? b.Pairs : (b.Config && b.Config.Pairs)), true);
+    buildRows(backupPairs(b), true);
     if (!rs.rows.length) { toFolders(); return; }
     // Folders without any place (the backup has no path for them) can't be restored by themselves: the list lets the
     // owner choose places.
@@ -152,8 +155,20 @@ function afterKey() {
   runScan();
 }
 
+/** The folders of a backup (its Pairs, else its Config's). */
+function backupPairs(b) {
+  return asList(b.Pairs && asList(b.Pairs).length ? b.Pairs : (b.Config && b.Config.Pairs));
+}
+
+/** A backup with folders in it is known: it will restore by itself. */
+function restoreKnown() {
+  const b = rs.discover && rs.discover.backup;
+  return !!b && backupPairs(b).some(p => p && p.Name);
+}
+
 /** Every folder of the backup is chosen: straight to Done, where setup.finish restores them. */
 function restoreAuto() {
+  rs.leftOut = rs.rows.filter(r => !r.on).map(r => r.name);   // named on the Done screen, never dropped silently
   rs.phase = 'list';   // Back from a Done screen that failed lands on the list of what was chosen
   rs.canSkip = false;
   rs.auto = true;
@@ -186,6 +201,7 @@ function showList() {
   rs.phase = 'list';
   rs.canSkip = false;
   rs.auto = false;
+  rs.leftOut = [];
   go('found');
   renderFound();
   loadSizes();
@@ -195,6 +211,7 @@ function showList() {
 function toFolders() {
   rs.seq++;
   rs.held = false;
+  rs.leftOut = [];
   rs.active = false;
   rs.phase = 'off';
   hooks.go('folders');
@@ -418,7 +435,7 @@ function renderFound() {
   if (isList) {
     const b = rs.discover && rs.discover.backup;
     if (b && !rs.fromScan) {
-      const day = fmtDay(String(b.Saved || '').slice(0, 10));
+      const day = fmtLocalDay(b.Saved);
       lead = day ? 'Backed up ' + day + (b.PcName ? ' from ' + b.PcName : '') : 'Backed up' + (b.PcName ? ' from ' + b.PcName : '');
     } else {
       lead = NO_BACKUP;
@@ -430,7 +447,8 @@ function renderFound() {
 
   if (loading) {
     const scan = rs.phase === 'scan';
-    const text = scan ? 'Looking for your folders in PikPak' + ELLIPSIS : RESTORING_TEXT;
+    // "Restoring" only once a backup with folders is known; until then the screen just says it is looking.
+    const text = !scan && restoreKnown() ? RESTORING_TEXT : LOOKING_TEXT;
     list.replaceChildren(h('div', { class: 'lrow empty' },
       h('span', { text: text + ' ' }),
       rs.canSkip ? h('button', { class: 'btn btn-quiet', text: 'Skip', onclick: toFolders }) : null,
@@ -471,11 +489,11 @@ async function startFresh() {
   rs.asking = true;
   let ok = false;
   try {
-    ok = await hooks.confirmBox({
-      title: 'Start fresh instead?',
-      body: [h('p', { text: FRESH_TEXT })],
-      ok: 'Start fresh'
-    });
+    // Before a backup or a list is known, nothing is there to be replaced: the question says only what happens.
+    const known = rs.phase === 'list' || !!(rs.discover && rs.discover.backup);
+    ok = await hooks.confirmBox(known
+      ? { title: 'Start fresh instead?', body: [h('p', { text: FRESH_TEXT })], ok: 'Start fresh' }
+      : { title: 'Set up from scratch instead?', body: [h('p', { text: SCRATCH_TEXT })], ok: 'Set up from scratch' });
   } finally {
     rs.asking = false;
   }
@@ -485,6 +503,7 @@ async function startFresh() {
 
 function restoreNow() {
   if (rs.phase !== 'list' || !ticked().length) return;
+  rs.leftOut = [];   // the ticks are the owner's choice now
   rs.active = true;
   hooks.go('done');
 }
@@ -625,6 +644,11 @@ export function restoreArg() {
   if (b && !rs.fromScan && b.Config) arg.settings = b.Config;
   if (b && !rs.fromScan) arg.saved = String(b.Saved || '');
   return arg;
+}
+
+/** Names of the backup's folders the automatic restore left out (no place, or a name used twice); empty otherwise. */
+export function leftOut() {
+  return rs.active ? rs.leftOut.slice() : [];
 }
 
 /** What discover / scan / usekey would have done, for the preview list on the Done screen. */

@@ -78,6 +78,12 @@ export function fmtDay(iso) {
   return Number(m[1]) === new Date().getFullYear() ? text : text + ' ' + m[1];
 }
 
+/** A saved timestamp as the browser shows dates (the setup list and the Done screen); '' when it is empty or can't be read. */
+export function fmtLocalDay(saved) {
+  const d = new Date(String(saved || ''));
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+}
+
 export function baseName(path) {
   const p = String(path || '').replace(/[\\/]+$/, '');
   const i = Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'));
