@@ -3561,6 +3561,7 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             $r.ok | Should -BeTrue
             $r.data.complete | Should -BeTrue
             Test-Path -LiteralPath ($letter + ':\') | Should -BeFalse
+            @($r.data.steps | Where-Object { $_.name -eq 'Restored folders' })[0].done | Should -BeTrue
             Test-Path -LiteralPath $c.Docs -PathType Container | Should -BeTrue
             (@($r.data.restored.driveMissing) -join ',') | Should -Be 'Music'
             @($r.data.restored.problems).Count | Should -Be 0
@@ -3593,8 +3594,23 @@ Describe 'Invoke-GuiRequest: restore from the backup' {
             Test-Path -LiteralPath $c.Docs -PathType Container | Should -BeTrue
             Test-Path -LiteralPath $c.Music -PathType Container | Should -BeTrue
             $r.data.restored.count | Should -Be 2
+            [IO.File]::WriteAllText((Join-Path $c.Docs 'keep.txt'), 'mine')
             $again = Invoke-Req (New-Req 'setup.finish' @{ resume = $true }) $c.ConfigPath
             $again.data.complete | Should -BeTrue
+            @($again.data.steps | Where-Object { $_.name -eq 'Restored folders' })[0].message | Should -Be 'No folders needed creating'
+            [IO.File]::ReadAllText((Join-Path $c.Docs 'keep.txt')) | Should -Be 'mine'
+        }
+
+        It 'restored folders count only real entries and refuse a path without a drive' {
+            $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            $one = New-GuiRestoredSummary -Config @{ Pairs = @(@{ Name = 'A'; Local = (Join-Path $root 'A') }) } -Result @{ DriveMissing = @(); Problems = @() }
+            $one.count | Should -Be 1
+            (New-GuiRestoredSummary -Config @{} -Result @{ DriveMissing = @(); Problems = @() }).count | Should -Be 0
+            $r = New-GuiRestoredFolders -Config @{ Pairs = @(@{ Name = 'NoDrive'; Local = '\pikpak-test-nodrive\Folder' }) }
+            @($r.Problems).Count | Should -Be 1
+            $r.Problems[0].Name | Should -Be 'NoDrive'
+            @($r.Created).Count | Should -Be 0
+            Test-Path -LiteralPath ([IO.Path]::GetPathRoot((Get-Location).Path) + 'pikpak-test-nodrive') | Should -BeFalse
         }
 
         It 'finish with restore under preview creates nothing' {

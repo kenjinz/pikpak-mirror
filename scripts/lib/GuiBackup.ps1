@@ -590,7 +590,8 @@ function New-GuiRestoredFolders {
             if ([string]::IsNullOrWhiteSpace($path)) { $problems.Add(@{ Name = $name; Path = $path; Reason = 'This folder has no path.' }); continue }
             if (Test-Path -LiteralPath $path -PathType Container) { continue }
             $root = [IO.Path]::GetPathRoot($path)
-            if ([string]::IsNullOrEmpty($root)) { $problems.Add(@{ Name = $name; Path = $path; Reason = 'The path is not a full path.' }); continue }
+            # Only a drive-letter root (C:\) or a UNC share root counts: a path such as \foo would land on the current drive.
+            if ($root -notmatch '^[A-Za-z]:\\$' -and $root -notmatch '^\\\\[^\\]+\\[^\\]+\\?$') { $problems.Add(@{ Name = $name; Path = $path; Reason = 'The path has no drive letter or network share, so the folder was not made.' }); continue }
             if (-not (Test-Path -LiteralPath $root)) { $missing.Add(@{ Name = $name; Path = $path }); continue }
             if (Test-Path -LiteralPath $path) { $problems.Add(@{ Name = $name; Path = $path; Reason = 'A file with this name is already there, so the folder could not be made.' }); continue }
             # -WhatIf is read from $WhatIfPreference, not ShouldProcess, so a preview prints nothing to the host.
@@ -615,7 +616,7 @@ function New-GuiRestoredSummary {
     param([Parameter(Mandatory)][hashtable]$Config, [Parameter(Mandatory)][hashtable]$Result, [AllowEmptyString()][string]$Saved = '')
     $paused = @(@($Config['Pairs']) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['PausedForKey'] -eq $true } | ForEach-Object { [string]$_['Name'] })
     @{
-        count        = (@($Config['Pairs']).Count + @($Config['PrivatePaths']).Count)
+        count        = (@(@($Config['Pairs']) | Where-Object { $_ }).Count + @(@($Config['PrivatePaths']) | Where-Object { $_ }).Count)
         saved        = $Saved
         driveMissing = @(@($Result.DriveMissing) | ForEach-Object { [string]$_.Name })
         pausedForKey = $paused
