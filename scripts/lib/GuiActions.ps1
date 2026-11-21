@@ -690,7 +690,7 @@ function Invoke-GuiActionFoldersRemove {
 
 function Set-GuiFolderPaused {
     # folders.pause / folders.resume: name + private pick the entry (as sync.repair does). Pausing sets Paused;
-    # resuming removes it. The encrypted-folder paths hash covers paths only, so it does not change.
+    # resuming removes it (and PausedForKey). The encrypted-folder paths hash covers paths only, so it does not change.
     param([Parameter(Mandatory)][hashtable]$Ctx, [Parameter(Mandatory)][bool]$Paused)
     $name = [string](Get-GuiArg $Ctx 'name' '')
     if ([string]::IsNullOrWhiteSpace($name)) { throw (New-GuiException 'bad-request' 'No folder name was given.') }
@@ -702,6 +702,8 @@ function Set-GuiFolderPaused {
     $raw = Get-RawMirrorConfig -Path $Ctx.ConfigPath
     $entry = @(@($raw[$key]) | Where-Object { $_ -and [string]$_.Name -ieq $name }) | Select-Object -First 1
     if ($null -eq $entry) { throw (New-GuiException 'not-found' ("No synced folder is called '{0}'." -f $name)) }
+    # PausedForKey says a restore paused it for the missing key; once the owner pauses or resumes it, that is no longer so.
+    $entry.Remove('PausedForKey')
     if ($Paused) { $entry['Paused'] = $true } else { $entry.Remove('Paused') }
     Save-GuiConfig -Ctx $Ctx -Config $raw
     if (Test-GuiPreview $Ctx) {

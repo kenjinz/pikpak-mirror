@@ -217,13 +217,36 @@ function Invoke-GuiActionPrivateKeyState {
     @{ hasKey = $false; encryptedData = ($raw -gt 0) }
 }
 
+function Get-GuiPrivateKeys {
+    # The prefix keys (ConvertTo-PrefixKey of the canonical path) of encrypted folder entries. An entry whose path
+    # cannot be resolved is left out, so it counts as not restored (fail closed).
+    param([AllowNull()][object[]]$Entries)
+    $keys = @()
+    foreach ($e in @($Entries)) {
+        if ($null -eq $e) { continue }
+        try { $keys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$e['Path']))) } catch { }
+    }
+    , $keys
+}
+
+function Test-GuiPairHoldsPrivate {
+    # $true when one of the encrypted folders (keys from Get-GuiPrivateKeys) sits inside the synced folder -Pair. That
+    # is what keeps it out of PikPak readable (filter rules of PrivatePaths). Fail closed: an unresolvable path is $false.
+    param([Parameter(Mandatory)][hashtable]$Pair, [AllowNull()][object[]]$PrivateKeys)
+    try {
+        $localKey = ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$Pair['Local']))
+        foreach ($pk in @($PrivateKeys)) { if (([string]$pk).StartsWith($localKey, [StringComparison]::Ordinal)) { return $true } }
+    }
+    catch { }
+    $false
+}
+
 function Get-GuiRestoreEntries {
     # args.entries of private.restore, checked: one hashtable per encrypted folder (Path in canonical spelling, Name,
     # Id when given and valid, Paused and any other plain per-folder field the backup carried). Anything that is not a
-    # plain value is dropped. bad-request when nothing usable was sent.
+    # plain value is dropped. No entries is fine: private.restore then only looks at the paused synced folders.
     param([Parameter(Mandatory)][hashtable]$Ctx)
     $rows = @(@(Get-GuiArg $Ctx 'entries' @()) | Where-Object { $null -ne $_ })
-    if ($rows.Count -eq 0) { throw (New-GuiException 'bad-request' 'Choose at least one encrypted folder to restore.') }
     $out = New-Object System.Collections.Generic.List[hashtable]
     foreach ($row in $rows) {
         if ($row -isnot [hashtable]) { throw (New-GuiException 'bad-request' 'The folder list is not valid.') }
@@ -257,7 +280,9 @@ function Invoke-GuiActionPrivateRestore {
     # paths as the owner placed them; Name and Id kept) and resumes the synced folders that were paused only for the
     # missing key. An entry whose name or place is already configured is skipped. A synced folder resumes only when an
     # encrypted folder now sits inside it (that is what keeps it out of PikPak readable); else it stays paused.
-    # A pair the owner paused has no PausedForKey and is never touched.
+    # A pair the owner paused has no PausedForKey and is never touched; only a pair that is paused AND flagged
+    # PausedForKey is looked at, and a stale PausedForKey on a pair that is not paused (resumed by hand) is dropped.
+    # With no entries it only re-checks those pairs against the encrypted folders already configured.
     param([Parameter(Mandatory)][hashtable]$Ctx)
     $cfg = $Ctx.Config
     $entries = Get-GuiRestoreEntries -Ctx $Ctx
@@ -292,24 +317,22 @@ function Invoke-GuiActionPrivateRestore {
 
     $raw = Get-RawMirrorConfig -Path $Ctx.ConfigPath
     $raw['PrivatePaths'] = @(@($raw['PrivatePaths']) | Where-Object { $_ }) + @($added.ToArray())
-    $privKeys = @()
-    foreach ($x in @($raw['PrivatePaths'])) {
-        try { $privKeys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$x['Path']))) } catch { }
-    }
+    $privKeys = @(Get-GuiPrivateKeys -Entries @($raw['PrivatePaths']))
     $resumed = New-Object System.Collections.Generic.List[string]
     $still = New-Object System.Collections.Generic.List[string]
+    $stale = 0
     foreach ($pair in @(@($raw['Pairs']) | Where-Object { $_ })) {
-        if ($pair['PausedForKey'] -ne $true) { continue }
-        $covered = $false
-        try {
-            $localKey = ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$pair['Local']))
-            foreach ($pk in $privKeys) { if ($pk.StartsWith($localKey, [StringComparison]::Ordinal)) { $covered = $true; break } }
-        }
-        catch { $covered = $false }
-        if ($covered) { $pair.Remove('Paused'); $pair.Remove('PausedForKey'); $resumed.Add([string]$pair['Name']) }
+        if (-not $pair.ContainsKey('PausedForKey')) { continue }
+        if ($pair['Paused'] -ne $true -or $pair['PausedForKey'] -ne $true) { $pair.Remove('PausedForKey'); $stale++; continue }
+        if (Test-GuiPairHoldsPrivate -Pair $pair -PrivateKeys $privKeys) { $pair.Remove('Paused'); $pair.Remove('PausedForKey'); $resumed.Add([string]$pair['Name']) }
         else { $still.Add([string]$pair['Name']) }
     }
 
+    if ($added.Count -eq 0 -and $resumed.Count -eq 0 -and $stale -eq 0) {
+        $res = @{ saved = $false; added = @(); skipped = $skipped.ToArray(); resumed = @(); stillPaused = $still.ToArray() }
+        if (Test-GuiPreview $Ctx) { $res['preview'] = @('Nothing to change.') }
+        return $res
+    }
     Save-GuiConfig -Ctx $Ctx -Config $raw
     if (Test-GuiPreview $Ctx) {
         $lines = New-Object System.Collections.Generic.List[string]
@@ -469,10 +492,7 @@ function New-GuiRestoreSetupConfig {
     )
     $defaults = New-GuiSetupConfig -Folders @() -Preset $Preset -DriveRoot $DriveRoot -Holding $Holding
     # Where the restored encrypted folders are. One whose path cannot be resolved counts as not restored (fail closed).
-    $privateKeys = @()
-    foreach ($e in @($Restore.privatePaths)) {
-        try { $privateKeys += , (ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$e['Path']))) } catch { }
-    }
+    $privateKeys = @(Get-GuiPrivateKeys -Entries @($Restore.privatePaths))
     $pairs = New-Object System.Collections.Generic.List[hashtable]
     foreach ($p in @($Restore.pairs)) {
         $row = @{} + $p
@@ -481,14 +501,8 @@ function New-GuiRestoreSetupConfig {
         # restored PrivatePaths entries under it. With none (key skipped, folder unticked or moved elsewhere) it
         # is restored paused for the key. A folder the owner paused stays paused as it was, so entering the key
         # later never resumes it.
-        if ($row['holdsEncrypted'] -eq $true -and $row['Paused'] -ne $true) {
-            $covered = $false
-            try {
-                $localKey = ConvertTo-PrefixKey (ConvertTo-MirrorPath ([string]$row['Local']))
-                foreach ($pk in $privateKeys) { if ($pk.StartsWith($localKey, [StringComparison]::Ordinal)) { $covered = $true; break } }
-            }
-            catch { $covered = $false }
-            if (-not $covered) { $row['Paused'] = $true; $row['PausedForKey'] = $true }
+        if ($row['holdsEncrypted'] -eq $true -and $row['Paused'] -ne $true -and -not (Test-GuiPairHoldsPrivate -Pair $row -PrivateKeys $privateKeys)) {
+            $row['Paused'] = $true; $row['PausedForKey'] = $true
         }
         $pairs.Add($row)
     }

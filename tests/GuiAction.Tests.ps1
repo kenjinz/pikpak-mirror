@@ -3057,8 +3057,65 @@ Describe 'Invoke-GuiRequest: using an existing recovery key' {
             (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = '' }) }) $script:S.Path).error.code | Should -Be 'bad-request'
             (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = 'Vault'; Name = 'Vault' }) }) $script:S.Path).error.code | Should -Be 'bad-request'
             (Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault'; Id = 'not-an-id' }) }) $script:S.Path).error.code | Should -Be 'bad-request'
-            (Invoke-Req (New-Req 'private.restore' @{ entries = @() }) $script:S.Path).error.code | Should -Be 'bad-request'
             [IO.File]::ReadAllText($script:S.Path) | Should -BeExactly $before
+        }
+
+        It 'private.restore with no entries resumes a pair whose encrypted folder is already configured' {
+            $raw = Get-RawMirrorConfig -Path $script:S.Path
+            $raw.PrivatePaths = @(@{ Path = $script:Vault; Name = 'Vault'; Id = $script:GidV })
+            [IO.File]::WriteAllText($script:S.Path, (ConvertTo-MirrorConfigText -Config $raw), (New-Object Text.UTF8Encoding $true))
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @() }) $script:S.Path
+            $r.ok | Should -BeTrue
+            $r.data.saved | Should -BeTrue
+            @($r.data.added).Count | Should -Be 0
+            (@($r.data.resumed) -join ',') | Should -Be 'Docs'
+            (@($r.data.stillPaused) -join ',') | Should -Be 'Other'
+            $pairs = @((Get-RawMirrorConfig -Path $script:S.Path).Pairs)
+            $docs = $pairs | Where-Object { $_.Name -eq 'Docs' }
+            $docs.ContainsKey('Paused') | Should -BeFalse
+            $docs.ContainsKey('PausedForKey') | Should -BeFalse
+            (@($pairs | Where-Object { $_.Name -eq 'Other' })[0]).PausedForKey | Should -BeTrue
+            @((Get-RawMirrorConfig -Path $script:S.Path).PrivatePaths).Count | Should -Be 1
+        }
+
+        It 'private.restore with no entries and nothing to resume changes nothing' {
+            $raw = Get-RawMirrorConfig -Path $script:S.Path
+            foreach ($p in @($raw.Pairs)) { $p.Remove('PausedForKey') }
+            [IO.File]::WriteAllText($script:S.Path, (ConvertTo-MirrorConfigText -Config $raw), (New-Object Text.UTF8Encoding $true))
+            $before = [IO.File]::ReadAllText($script:S.Path)
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @() }) $script:S.Path
+            $r.ok | Should -BeTrue
+            $r.data.saved | Should -BeFalse
+            [IO.File]::ReadAllText($script:S.Path) | Should -BeExactly $before
+            Test-Path -LiteralPath ($script:S.Path + '.bak') | Should -BeFalse
+        }
+
+        It 'private.restore drops a stale PausedForKey and does not report that pair' {
+            # Docs was resumed by hand (older app versions left PausedForKey behind): not paused, flag still set.
+            $raw = Get-RawMirrorConfig -Path $script:S.Path
+            $docs = @($raw.Pairs) | Where-Object { $_.Name -eq 'Docs' }
+            $docs.Remove('Paused')
+            [IO.File]::WriteAllText($script:S.Path, (ConvertTo-MirrorConfigText -Config $raw), (New-Object Text.UTF8Encoding $true))
+            $r = Invoke-Req (New-Req 'private.restore' @{ entries = @(@{ Path = $script:Vault; Name = 'Vault'; Id = $script:GidV }) }) $script:S.Path
+            $r.ok | Should -BeTrue
+            @($r.data.resumed) -contains 'Docs' | Should -BeFalse
+            @($r.data.stillPaused) -contains 'Docs' | Should -BeFalse
+            $d = @((Get-RawMirrorConfig -Path $script:S.Path).Pairs) | Where-Object { $_.Name -eq 'Docs' }
+            $d.ContainsKey('PausedForKey') | Should -BeFalse
+            $d.ContainsKey('Paused') | Should -BeFalse
+        }
+
+        It 'folders.resume and folders.pause clear PausedForKey' {
+            $r = Invoke-Req (New-Req 'folders.resume' @{ name = 'Docs' }) $script:S.Path
+            $r.ok | Should -BeTrue
+            $d = @((Get-RawMirrorConfig -Path $script:S.Path).Pairs) | Where-Object { $_.Name -eq 'Docs' }
+            $d.ContainsKey('Paused') | Should -BeFalse
+            $d.ContainsKey('PausedForKey') | Should -BeFalse
+            $r2 = Invoke-Req (New-Req 'folders.pause' @{ name = 'Other' }) $script:S.Path
+            $r2.ok | Should -BeTrue
+            $o = @((Get-RawMirrorConfig -Path $script:S.Path).Pairs) | Where-Object { $_.Name -eq 'Other' }
+            $o.Paused | Should -BeTrue
+            $o.ContainsKey('PausedForKey') | Should -BeFalse
         }
 
         It 'private.restore in preview writes nothing' {

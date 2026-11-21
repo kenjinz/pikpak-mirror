@@ -251,6 +251,7 @@ async function toggleBandwidth(ev) {
 // ===== encrypted folders ==============================================================================
 
 function renderPrivate() {
+  renderPausedKey();
   const list = privatePaths(settings.config);
   const box = $('#setPrivList');
   if (!list.length) {
@@ -338,10 +339,24 @@ async function loadKeyState() {
 }
 
 function renderUseKey() {
-  const phase = settings.noKey ? settings.keyPhase : 'off';
+  const phase = settings.noKey || settings.keyPhase === 'found' ? settings.keyPhase : 'off';
   $('#setNoKey').hidden = phase !== 'row';
   $('#setUseKeyForm').hidden = phase !== 'form';
   $('#setFound').hidden = phase !== 'found';
+  renderPausedKey();
+}
+
+/** Synced folders a restore paused for the missing key, as the config says now. */
+function pausedForKey() {
+  return asList(settings.config && settings.config.Pairs).filter(p => p && p.Paused === true && p.PausedForKey === true).map(p => String(p.Name));
+}
+
+/** The quiet row for folders still paused for their encrypted folders (key already on this PC). */
+function renderPausedKey() {
+  const names = pausedForKey();
+  const show = names.length > 0 && !settings.noKey && settings.keyPhase !== 'found';
+  $('#setPausedKey').hidden = !show;
+  if (show) $('#setPausedKeyText').textContent = 'Some folders are paused until their encrypted folders are back (' + names.join(', ') + ').';
 }
 
 /** Closes the box and the found list and empties the key fields. */
@@ -398,6 +413,8 @@ async function checkUseKey() {
   d = d || {};
   if (!d.source && asList(d.preview).length) { say('setUseKeyMsg', 'Preview: ' + asList(d.preview).join(' '), 'done'); return; }
   say('setUseKeyMsg', '');
+  // private.usekey made the key remote: from here on this PC has the key, whatever happens to the found list.
+  settings.noKey = false;
   const rows = d.source === 'backup' ? asList(d.folders).map(encRow).filter(Boolean) : [];
   if (!rows.length) { await keyAcceptedWithoutList(); return; }
   showFound(rows);
@@ -405,7 +422,6 @@ async function checkUseKey() {
 
 /** The key works but PikPak has no usable list: the folders are connected one by one (Reconnect). */
 async function keyAcceptedWithoutList() {
-  settings.noKey = false;
   closeUseKey();
   say('setPrivMsg', NO_LIST_TEXT, 'quiet');
   await loadRemote();
@@ -417,7 +433,7 @@ function showFound(rows) {
     if (mine.has(r.name.toLowerCase())) { r.locked = true; r.note = 'Already set up on this PC.'; }
   }
   tickDefaults(rows);
-  const waiting = asList(settings.config && settings.config.Pairs).filter(p => p && p.PausedForKey === true).map(p => String(p.Name));
+  const waiting = pausedForKey();
   settings.found = { rows, waiting };
   settings.keyPhase = 'found';
   renderFound();
@@ -489,15 +505,43 @@ async function restoreFound() {
   $('#setFoundCancel').disabled = false;
   if (id !== settings.loadId) return;
   if (r && r.saved === false && r.preview) { say('setFoundMsg', 'Preview: ' + asList(r.preview).join(' '), 'done'); renderFound(); return; }
-  const added = asList(r && r.added), resumed = asList(r && r.resumed), still = asList(r && r.stillPaused);
-  const one = n => n === 1;
-  let text = 'Restored ' + (one(added.length) ? "'" + added[0] + "'" : added.length + ' encrypted folders') + '. Their files come down at the next sync.';
-  if (resumed.length) text += ' ' + resumed.join(', ') + (one(resumed.length) ? ' is' : ' are') + ' syncing again.';
-  if (still.length) text += ' ' + still.join(', ') + (one(still.length) ? ' stays' : ' stay') + ' paused, because none of the restored encrypted folders is inside '
-    + (one(still.length) ? 'it' : 'them') + '. Resume ' + (one(still.length) ? 'it' : 'them') + ' on Home when that is right.';
-  settings.noKey = false;
+  const text = restoreText(r);
   closeUseKey();
   say('setPrivMsg', text, 'done');
+  await refreshConfig();
+}
+
+/** What a private.restore result did, in words. */
+function restoreText(r) {
+  const added = asList(r && r.added), resumed = asList(r && r.resumed), still = asList(r && r.stillPaused);
+  const one = n => n === 1;
+  const parts = [];
+  if (added.length) parts.push('Restored ' + (one(added.length) ? "'" + added[0] + "'" : added.length + ' encrypted folders') + '. Their files come down at the next sync.');
+  if (resumed.length) parts.push(resumed.join(', ') + (one(resumed.length) ? ' is' : ' are') + ' syncing again.');
+  if (still.length) parts.push(still.join(', ') + (one(still.length) ? ' stays' : ' stay') + ' paused, because none of your encrypted folders is inside '
+    + (one(still.length) ? 'it' : 'them') + '. Resume ' + (one(still.length) ? 'it' : 'them') + ' on Home when that is right.');
+  return parts.length ? parts.join(' ') : 'Nothing needed to change.';
+}
+
+/** Not now: the key is already on this PC, the folders were not restored. Reconnect still works from the PikPak list. */
+async function leaveFound() {
+  if (settings.keyBusy) return;
+  closeUseKey();
+  say('setPrivMsg', 'Your recovery key is saved on this PC, but your encrypted folders were not restored. Reconnect them one by one under Encrypted folders in PikPak.', 'quiet');
+  await loadRemote();
+}
+
+/** Check again: with no folders to add, private.restore only re-checks the folders paused for the key. */
+async function checkPaused() {
+  const btn = $('#setPausedKeyCheck');
+  const id = settings.loadId;
+  say('setPrivMsg', '');
+  let r;
+  try { r = await whileBusy(btn, () => call('private.restore', { entries: [] })); }
+  catch (e) { failed('setPrivMsg', e, "The paused folders couldn't be checked."); return; }
+  if (id !== settings.loadId) return;
+  if (r && r.saved === false && r.preview) { say('setPrivMsg', 'Preview: ' + asList(r.preview).join(' '), 'done'); return; }
+  say('setPrivMsg', restoreText(r), 'done');
   await refreshConfig();
 }
 
@@ -814,7 +858,8 @@ export function wireSettings() {
   $('#setUseKeyForm').addEventListener('submit', e => { e.preventDefault(); checkUseKey(); });
   $('#setUseKeyPairLink').addEventListener('click', () => { useKeyBox.setPairMode(!useKeyBox.pairMode); say('setUseKeyMsg', ''); useKeyBox.focus(); });
   $('#setUseKeyCancel').addEventListener('click', closeUseKey);
-  $('#setFoundCancel').addEventListener('click', closeUseKey);
+  $('#setFoundCancel').addEventListener('click', leaveFound);
+  $('#setPausedKeyCheck').addEventListener('click', checkPaused);
   $('#setFoundRestore').addEventListener('click', restoreFound);
   $('#setRemoteShow').addEventListener('click', loadRemote);
   $('#setShowKey').addEventListener('click', toggleKey);
